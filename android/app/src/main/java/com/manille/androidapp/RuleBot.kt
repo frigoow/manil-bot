@@ -40,7 +40,7 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
      * the asset is missing or bad: the rule play-out then runs alone.
      */
     private val fastNets: Map<Pair<Int, Boolean>, Long> = PLY_CHOICES.filter { it > 0 }
-        .flatMap { plies -> listOf(plies to false, plies to true) }
+        .map { plies -> plies to TRICK_END }
         .mapNotNull { key ->
             runCatching {
                 val net = NativeGame.nativeFastNetLoad(ModelFiles.install(context, FAST_NET_FILE,
@@ -176,7 +176,9 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
          */
         const val TRICK_END = true
         /** The selectable play-out depths in plies (4 per trick; the "Bot thinking" setting). */
-        val PLY_CHOICES = listOf(0, 4, 8)
+        val PLY_CHOICES = listOf(0, 4, 8, 12, WHOLE_DEAL)
+        /** More plies than any deal has left: the net plays the whole simulated deal. */
+        const val WHOLE_DEAL = 32
         // softmax temperature on the P(match win) scale (desktop decl_temp)
         private const val TEMP = 0.01
 

@@ -272,6 +272,7 @@ private fun Lobby(controller: GameController, openStats: () -> Unit) {
 /** Label for the play-out net setting, in tricks (4 plies = 1 trick); 0 = off. */
 private fun pliesLabel(plies: Int) = when (val t = plies / 4) {
     0 -> tr("Standard", "Standaard")
+    RuleBot.WHOLE_DEAL / 4 -> tr("Whole deal", "Hele spel")
     1 -> tr("1 trick", "1 slag")
     else -> tr("$t tricks", "$t slagen")
 }
@@ -288,7 +289,8 @@ private fun BotThinkingPicker(controller: GameController) = Column(Modifier.widt
         }
     }
     Spacer(Modifier.height(4.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    // five choices: scroll sideways on narrow phones rather than wrap
+    Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
         RuleBot.PLY_CHOICES.forEachIndexed { i, plies ->
             if (i > 0) Spacer(Modifier.width(6.dp))
             LanguageChip(pliesLabel(plies), controller.netPlies == plies) { controller.setPlayoutPlies(plies) }
