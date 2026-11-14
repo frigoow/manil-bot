@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="128" alt="Manille"></p>
+
 # Manille
 
 **Manille on your phone**, against bots that play it properly. Everything runs

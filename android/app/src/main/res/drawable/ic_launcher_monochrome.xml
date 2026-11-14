@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Manille launcher icon (adaptive): single-colour layer for themed icons (Android 13+). 108x108 canvas, the visible
+     area is the central 72x72. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="55.5" android:pivotY="57.5" android:scaleX="0.84" android:scaleY="0.84"
+        android:translateX="-1.5" android:translateY="-3.5">
+        <group android:rotation="-14" android:pivotX="54" android:pivotY="58">
+            <path android:pathData="M36,31 h28 a5,5 0 0 1 5,5 v44 a5,5 0 0 1 -5,5 h-28 a5,5 0 0 1 -5,-5 v-44 a5,5 0 0 1 5,-5 z" android:fillColor="#00000000"
+                android:strokeColor="#FF000000" android:strokeWidth="2.2" />
+        </group>
+        <group android:rotation="9" android:pivotX="56" android:pivotY="58">
+            <!-- the card with the 10 and the hearts cut out -->
+            <path android:fillType="evenOdd" android:fillColor="#FF000000"
+                android:pathData="M45,30 h28 a5,5 0 0 1 5,5 v44 a5,5 0 0 1 -5,5 h-28 a5,5 0 0 1 -5,-5 v-44 a5,5 0 0 1 5,-5 z M47.6,51.5 L51.6,47.6 L54.6,47.6 L54.6,68.4 L50.6,68.4 L50.6,52.6 L49.4,53.6 Z M65,47.4 C70,47.4 72.3,52 72.3,58 C72.3,64 70,68.6 65,68.6 C60,68.6 57.7,64 57.7,58 C57.7,52 60,47.4 65,47.4 Z M46.300,39.380 C46.300,39.380 43.200,37.210 43.200,35.474 C43.200,34.544 43.944,33.800 44.874,33.800 C45.494,33.800 45.990,34.172 46.300,34.668 C46.610,34.172 47.106,33.800 47.726,33.800 C48.656,33.800 49.400,34.544 49.400,35.474 C49.400,37.210 46.300,39.380 46.300,39.380 Z M71.700,74.620 C71.700,74.620 74.800,76.790 74.800,78.526 C74.800,79.456 74.056,80.200 73.126,80.200 C72.506,80.200 72.010,79.828 71.700,79.332 C71.390,79.828 70.894,80.200 70.274,80.200 C69.344,80.200 68.600,79.456 68.600,78.526 C68.600,76.790 71.700,74.620 71.700,74.620 Z" />
+            <path android:fillColor="#FF000000"
+                android:pathData="M65,51.2 C62.6,51.2 61.7,54 61.7,58 C61.7,62 62.6,64.8 65,64.8 C67.4,64.8 68.3,62 68.3,58 C68.3,54 67.4,51.2 65,51.2 Z" />
+        </group>
+    </group>
+</vector>

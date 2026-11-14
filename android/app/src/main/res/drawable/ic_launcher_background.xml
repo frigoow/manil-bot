@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Manille launcher icon (adaptive): green card-table felt. 108x108 canvas, the visible
+     area is the central 72x72. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="54" android:centerY="45.4"
+                android:gradientRadius="75.6">
+                <item android:offset="0" android:color="#FF2F8457" />
+                <item android:offset="1" android:color="#FF0F3523" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
