@@ -1,0 +1,22 @@
+# Android build output and local SDK path
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+android/build/
+android/local.properties
+android/gradle/gradle-daemon-jvm.properties
+.idea/
+*.iml
+
+# The networks: downloaded by scripts/fetch_models.sh, never committed
+android/app/src/main/assets/models/*.onnx
+android/app/src/main/assets/models/*.bin
+android/app/src/main/assets/models/*.npz
+
+# Desktop build of the C++ tests
+build/
+cpp/build/
+
+# Signing keys never belong in the repository
+*.keystore
+*.jks

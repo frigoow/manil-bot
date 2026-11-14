@@ -1,0 +1,79 @@
+name: Release
+
+# Push a tag vX.Y.Z (matching versionName in android/app/build.gradle.kts) and
+# this builds the signed APK and publishes it as a GitHub release. The
+# networks come from the models release (MODELS_TAG); they are not in git.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build, e.g. v1.0.0
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  MODELS_TAG: models-v1
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Tag matches the app version
+        run: |
+          name=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts)
+          if [ "v$name" != "$TAG" ]; then
+            echo "::error::tag $TAG but versionName is $name -- bump android/app/build.gradle.kts (versionName and versionCode)"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android SDK packages
+        run: |
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdk" --licenses > /dev/null
+          "$sdk" --install "platforms;android-37" "ndk;30.0.16138531" "cmake;3.22.1"
+
+      - name: Networks
+        run: MODELS_TAG=$MODELS_TAG scripts/fetch_models.sh
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.MANILLE_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::secret MANILLE_KEYSTORE_B64 is not set"; exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "MANILLE_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build
+        working-directory: android
+        env:
+          MANILLE_KEYSTORE_PASSWORD: ${{ secrets.MANILLE_KEYSTORE_PASSWORD }}
+          MANILLE_KEY_ALIAS: ${{ secrets.MANILLE_KEY_ALIAS }}
+          MANILLE_KEY_PASSWORD: ${{ secrets.MANILLE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Manille.apk
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" Manille.apk --clobber
+          else
+            gh release create "$TAG" Manille.apk --title "Manille $TAG" --generate-notes --latest
+          fi

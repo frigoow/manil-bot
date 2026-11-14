@@ -1,0 +1,20 @@
+name: CI
+
+# The C++ the app runs, built and tested on the desktop (no phone, no models
+# needed): the C interface end to end, the trump rule and the world sampler.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
