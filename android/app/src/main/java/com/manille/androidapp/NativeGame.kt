@@ -164,6 +164,7 @@ class NativeGame() : Closeable {
         @JvmStatic external fun nativeFastNetLoad(path: String): Long
         @JvmStatic external fun nativeFastNetFree(net: Long)
         @JvmStatic external fun nativeFastNetSetPlies(net: Long, plies: Int)
+        @JvmStatic external fun nativeFastNetSetTrickEnd(net: Long, on: Boolean)
         @JvmStatic private external fun nativeRuleChoose(
             handle: Long, belief: FloatArray?, q: FloatArray?, trumpRuleKnown: Boolean, nWorlds: Int,
         ): Int

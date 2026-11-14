@@ -363,6 +363,13 @@ Java_com_manille_androidapp_NativeGame_nativeFastNetFree(JNIEnv*, jclass, jlong 
 
 // Net-guided plies before the rule policy takes over (default 4); set it
 // before the handle is shared with worker threads.
+// Nonzero: the net finishes the trick its plies end in. Set before sharing.
+extern "C" JNIEXPORT void JNICALL
+Java_com_manille_androidapp_NativeGame_nativeFastNetSetTrickEnd(JNIEnv* env, jclass, jlong net,
+                                                                jboolean on) {
+    check(manille_mobile_fastnet_set_trick_end(reinterpret_cast<ManilleFastNet*>(net), on ? 1 : 0), env);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_manille_androidapp_NativeGame_nativeFastNetSetPlies(JNIEnv* env, jclass, jlong net,
                                                              jint plies) {

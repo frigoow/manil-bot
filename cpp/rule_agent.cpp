@@ -1209,7 +1209,7 @@ Decision choose(const ManilleGame& game, int me, int dealer,
         };
         auto per = rollout::evaluate_candidates(k.trump, dealer, me, k.legal, wabs, history, opt,
                                                 hybrid ? &net_choose : nullptr,
-                                                P.playout_net_plies);
+                                                P.playout_net_plies, P.playout_net_trick_end);
         if (!hybrid && net && !net->empty() && P.playout_net_mix > 0) {
             // the learned continuation: every seat of every world follows
             // the net instead of (or mixed with) the rule policy

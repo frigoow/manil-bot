@@ -32,20 +32,31 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
      * suit deals, 4 plies ~+0.2. Cost on one desktop core ~94 ms/move at 4
      * plies, ~174 ms at 8 (rule play-out alone 8 ms).
      *
-     * One native handle per ply count (the handle carries its plies), so a
-     * setting change never touches a handle a move is using. Empty when the
-     * asset is missing or bad: the rule play-out then runs alone.
+     * With [netTrickEnd] the net also finishes the trick its plies end in,
+     * so it hands over on a trick boundary (4 plies -> 4..7 cards).
+     *
+     * One native handle per (plies, trick end) -- the handle carries both --
+     * so a setting change never touches a handle a move is using. Empty when
+     * the asset is missing or bad: the rule play-out then runs alone.
      */
-    private val fastNets: Map<Int, Long> = PLY_CHOICES.filter { it > 0 }.mapNotNull { plies ->
-        runCatching {
-            val net = NativeGame.nativeFastNetLoad(ModelFiles.install(context, FAST_NET_FILE,
-                "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.").path)
-            if (net == 0L) null else { NativeGame.nativeFastNetSetPlies(net, plies); plies to net }
-        }.getOrNull()
-    }.toMap()
+    private val fastNets: Map<Pair<Int, Boolean>, Long> = PLY_CHOICES.filter { it > 0 }
+        .flatMap { plies -> listOf(plies to false, plies to true) }
+        .mapNotNull { key ->
+            runCatching {
+                val net = NativeGame.nativeFastNetLoad(ModelFiles.install(context, FAST_NET_FILE,
+                    "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.").path)
+                if (net == 0L) null else {
+                    NativeGame.nativeFastNetSetPlies(net, key.first)
+                    NativeGame.nativeFastNetSetTrickEnd(net, key.second)
+                    key to net
+                }
+            }.getOrNull()
+        }.toMap()
 
     /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
     @Volatile var netPlies: Int = 0
+    /** The net finishes the trick its plies end in. */
+    @Volatile var netTrickEnd: Boolean = false
 
     /** True when the play-out net loaded, so [netPlies] has an effect. */
     val hasFastNet: Boolean get() = fastNets.isNotEmpty()
@@ -94,7 +105,7 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
         for (s in scores) q[s.card] = s.value
         lap(2)
         val extra = if (state.doubled) doubleWeights(worlds, state, calls) else null; lap(3)
-        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies] ?: 0L); lap(4)
+        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies to netTrickEnd] ?: 0L); lap(4)
         return card
     }
 

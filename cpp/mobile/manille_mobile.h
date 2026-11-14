@@ -192,6 +192,8 @@ int manille_mobile_rule_choose_worlds(
 int manille_mobile_fastnet_load(const char* path, ManilleFastNet** out_net);
 void manille_mobile_fastnet_free(ManilleFastNet* net);
 int manille_mobile_fastnet_set_plies(ManilleFastNet* net, int32_t plies);
+// Nonzero: when its plies run out the net still finishes the trick it is in.
+int manille_mobile_fastnet_set_trick_end(ManilleFastNet* net, int32_t on);
 int manille_mobile_rule_choose_worlds_net(
     const ManilleMobileGame* game,
     const int64_t* worlds,

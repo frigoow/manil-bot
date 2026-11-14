@@ -465,6 +465,8 @@ struct ManilleFastNet {
     // for the full net play-out) and still kept most of the gain; 0 = net
     // for the whole play-out.
     int plies = 4;
+    // finish the trick the plies end in (hand over on a trick boundary)
+    bool trick_end = false;
 };
 
 int manille_mobile_fastnet_load(const char* path, ManilleFastNet** out_net) {
@@ -479,6 +481,15 @@ int manille_mobile_fastnet_load(const char* path, ManilleFastNet** out_net) {
 
 void manille_mobile_fastnet_free(ManilleFastNet* net) {
     delete net;
+}
+
+int manille_mobile_fastnet_set_trick_end(ManilleFastNet* net, int32_t on) {
+    return guarded([&]() -> int {
+        if (net == nullptr)
+            return fail(MANILLE_MOBILE_INVALID_ARGUMENT, "net must be non-null.");
+        net->trick_end = on != 0;
+        return MANILLE_MOBILE_OK;
+    });
 }
 
 int manille_mobile_fastnet_set_plies(ManilleFastNet* net, int32_t plies) {
@@ -514,8 +525,10 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
             for (int p = 0; p < 4; ++p)
                 ws[i][p] = worlds[4 * i + p];
         rule::Params params;
-        if (net)
+        if (net) {
             params.playout_net_plies = net->plies;
+            params.playout_net_trick_end = net->trick_end;
+        }
         rule::Decision d = rule::choose(g, static_cast<int>(g.currentPlayer()), g.declarer(),
                                         ws, history_of(g), belief, q, params, extra,
                                         net ? &net->net : nullptr);

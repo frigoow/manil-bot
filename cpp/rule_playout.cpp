@@ -675,7 +675,7 @@ std::vector<std::vector<double>> evaluate_candidates(
     const std::vector<World>& worlds,
     const History& history,
     const Options& opt,
-    const NetChoose* net, int net_plies) {
+    const NetChoose* net, int net_plies, bool net_to_trick_end) {
     std::vector<std::vector<double>> out(candidates.size(),
                                          std::vector<double>(worlds.size(), 0.0));
     for (size_t wi = 0; wi < worlds.size(); ++wi) {
@@ -688,10 +688,14 @@ std::vector<std::vector<double>> evaluate_candidates(
             Replayed r = base;
             play(r, me, candidates[ci]);
             int ply = 0;
+            // once the net hands over it stays off: the trick test would
+            // otherwise switch it back on at the next trick's second card
+            bool net_on = net && net_plies > 0;
             while (!r.game.finished()) {
                 int seat = static_cast<int>(r.game.currentPlayer());
                 std::vector<int> legal = legalOf(r.game);
-                int c = (net && ply < net_plies && legal.size() > 1)
+                net_on = net_on && (ply < net_plies || (net_to_trick_end && !r.trick.empty()));
+                int c = (net_on && legal.size() > 1)
                     ? (*net)(r.game, seat)
                     : r.policy.choose(seat, legal, handsOf(r.game), r.trick);
                 play(r, seat, c);

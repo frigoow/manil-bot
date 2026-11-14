@@ -218,7 +218,8 @@ int main() {
             for (int c = 0; c < 32; ++c)
                 assert(((legal_mask >> c) & 1) == !std::isnan(values[c]));
         // the fast play-out net: a tiny synthetic file in the MFPN layout,
-        // hybrid (default 4 plies) and net-throughout both pick legal cards
+        // hybrid (4 / 8 plies, cut or to the trick's end) and net-throughout
+        // all pick legal cards
         {
             const char* path = "test_mobile_fastnet.bin";
             FILE* f = std::fopen(path, "wb");
@@ -237,8 +238,12 @@ int main() {
             assert(manille_mobile_fastnet_load(path, &net) == MANILLE_MOBILE_OK && net != nullptr);
             assert(manille_mobile_fastnet_set_plies(net, -1) != MANILLE_MOBILE_OK);
             assert(manille_mobile_fastnet_set_plies(nullptr, 4) != MANILLE_MOBILE_OK);
-            for (int plies : {4, 0}) {
+            assert(manille_mobile_fastnet_set_trick_end(nullptr, 1) != MANILLE_MOBILE_OK);
+            for (int variant : {4, 8, 104, 108, 0}) {
+                // 100+: the net finishes the trick its plies end in
+                const int plies = variant % 100;
                 assert(manille_mobile_fastnet_set_plies(net, plies) == MANILLE_MOBILE_OK);
+                assert(manille_mobile_fastnet_set_trick_end(net, variant >= 100) == MANILLE_MOBILE_OK);
                 card = -1;
                 assert(manille_mobile_rule_choose_worlds_net(copy, cur2.data(), n2, nullptr, nullptr,
                                                              nullptr, net, &card, values)

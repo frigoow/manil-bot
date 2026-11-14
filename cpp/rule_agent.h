@@ -117,6 +117,8 @@ struct Params {
     // plies after the candidate, the rule policy the rest (the full net is
     // ~70x the rule play-out's cost, far over the phone budget)
     int playout_net_plies = 0;
+    // the net also finishes the trick in progress when its plies run out
+    bool playout_net_trick_end = false;
 };
 
 struct Decision {

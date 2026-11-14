@@ -72,14 +72,16 @@ using NetChoose = std::function<int(const ManilleGame&, int)>;
 
 // Final team points of `me`'s team, [candidate][world]. With `net`, the first
 // `net_plies` plies after the candidate follow the net, the rest the rule
-// policy (whose public record still sees every play).
+// policy (whose public record still sees every play). With
+// `net_to_trick_end` the net also finishes the trick it is in when the count
+// runs out, so the hand-over always falls on a trick boundary.
 std::vector<std::vector<double>> evaluate_candidates(
     int trump, int declarer, int me,
     const std::vector<int>& candidates,
     const std::vector<World>& worlds,
     const History& history,
     const Options& opt,
-    const NetChoose* net = nullptr, int net_plies = 0);
+    const NetChoose* net = nullptr, int net_plies = 0, bool net_to_trick_end = false);
 
 // Likelihood weight per world: each play by another seat that the policy
 // would not have made in that world multiplies the weight by eps.

@@ -33,6 +33,7 @@ class ProfileStore(private val context: Context) {
     var smileys: Boolean = true; private set
     var animations: Boolean = true; private set
     var netPlies: Int = 0; private set
+    var netTrickEnd: Boolean = false; private set
     /** "nl" (the default) or "en"; only an explicit choice in the lobby or menu overrides Dutch. */
     var language: String = "nl"; private set
     private var languageChosen = false
@@ -59,6 +60,7 @@ class ProfileStore(private val context: Context) {
         smileys = j.optBoolean("smileys", true)
         animations = j.optBoolean("animations", true)
         netPlies = j.optInt("netPlies", 0)
+        netTrickEnd = j.optBoolean("netTrickEnd", false)
         languageChosen = j.optBoolean("languageChosen", false)
         language = if (languageChosen) j.optString("language", "nl") else "nl"
         theme = j.optString("theme", "cafe")
@@ -67,7 +69,7 @@ class ProfileStore(private val context: Context) {
     private fun save() {
         val arr = JSONArray()
         profiles.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
-        runCatching { JsonFile.write(file, JSONObject().put("profiles", arr).put("active", activeId).put("fourColor", fourColor).put("smileys", smileys).put("animations", animations).put("netPlies", netPlies).put("language", language).put("languageChosen", languageChosen).put("theme", theme)) }
+        runCatching { JsonFile.write(file, JSONObject().put("profiles", arr).put("active", activeId).put("fourColor", fourColor).put("smileys", smileys).put("animations", animations).put("netPlies", netPlies).put("netTrickEnd", netTrickEnd).put("language", language).put("languageChosen", languageChosen).put("theme", theme)) }
     }
 
     fun select(id: String) { if (profiles.any { it.id == id }) { activeId = id; save() } }
@@ -98,6 +100,7 @@ class ProfileStore(private val context: Context) {
     fun setSmileys(on: Boolean) { smileys = on; save() }
     fun setAnimations(on: Boolean) { animations = on; save() }
     fun setNetPlies(plies: Int) { netPlies = plies; save() }
+    fun setNetTrickEnd(on: Boolean) { netTrickEnd = on; save() }
     fun setLanguage(lang: String) { language = lang; languageChosen = true; save() }
     fun setTheme(id: String) { theme = id; save() }
 }
