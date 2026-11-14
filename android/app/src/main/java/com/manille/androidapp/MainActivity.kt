@@ -239,6 +239,10 @@ private fun Lobby(controller: GameController, openStats: () -> Unit) {
                         }
                         Switch(checked = controller.animations, onCheckedChange = controller::enableAnimations)
                     }
+                    if (controller.playoutNetAvailable) {
+                        Spacer(Modifier.height(6.dp))
+                        BotThinkingPicker(controller)
+                    }
                     Spacer(Modifier.height(8.dp))
                     ThemePicker(controller)
                 }
@@ -263,6 +267,33 @@ private fun Lobby(controller: GameController, openStats: () -> Unit) {
         }
     }
     if (profileDialog) ProfileDialog(controller) { profileDialog = false }
+}
+
+/** Ply label for the play-out net setting: 0 = off. */
+private fun pliesLabel(plies: Int) = if (plies == 0) tr("Standard", "Standaard") else tr("$plies plies", "$plies zetten")
+
+/** The bots' play-out depth with the learned net, and how long they think. */
+@Composable
+private fun BotThinkingPicker(controller: GameController) = Column(Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(tr("Bot thinking", "Denkwerk van de bots"), color = Ink, fontSize = 13.sp)
+            Text(tr("A learned net plays the first plies of every simulated deal: stronger, slower",
+                "Een geleerd netwerk speelt de eerste zetten van elk gesimuleerd spel: sterker, trager"),
+                color = InkDim, fontSize = 11.sp)
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        RuleBot.PLY_CHOICES.forEachIndexed { i, plies ->
+            if (i > 0) Spacer(Modifier.width(6.dp))
+            LanguageChip(pliesLabel(plies), controller.netPlies == plies) { controller.setPlayoutPlies(plies) }
+        }
+    }
+    val mean = controller.botMsMean
+    Text(if (mean == null) tr("Thinking time: play a few moves to measure it", "Denktijd: speel enkele zetten om te meten")
+         else tr("Thinking time: $mean ms per move (slowest ${controller.botMsMax} ms)", "Denktijd: $mean ms per zet (traagste ${controller.botMsMax} ms)"),
+        color = InkDim, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
 }
 
 @Composable
@@ -578,6 +609,13 @@ private fun GameMenu(controller: GameController, restart: () -> Unit) {
                 onClick = { controller.enableAnimations(!controller.animations) })
             DropdownMenuItem(text = { Text(if (controller.smileys) tr("Smileys: on", "Smileys: aan") else tr("Smileys: off", "Smileys: uit")) },
                 onClick = { controller.enableSmileys(!controller.smileys) })
+            if (controller.playoutNetAvailable) DropdownMenuItem(
+                text = { Text(tr("Bot thinking: ", "Denkwerk: ") + pliesLabel(controller.netPlies) +
+                    (controller.botMsMean?.let { " · $it ms" } ?: "")) },
+                onClick = {
+                    val c = RuleBot.PLY_CHOICES
+                    controller.setPlayoutPlies(c[(c.indexOf(controller.netPlies) + 1) % c.size])
+                })
             DropdownMenuItem(text = { Text(if (controller.dutch) "Language: English" else "Taal: Nederlands") },
                 onClick = { controller.setLanguage(!controller.dutch) })
             DropdownMenuItem(text = { Text(tr("Restart", "Herbeginnen")) }, onClick = { open = false; restart() })

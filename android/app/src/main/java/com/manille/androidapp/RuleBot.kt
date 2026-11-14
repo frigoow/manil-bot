@@ -26,23 +26,29 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
     private val mullQ = QNet(context, QNet.MULL_MODEL_FILE)
     /**
      * The fast learned play-out (cpp/fast_policy.h): every simulated seat
-     * follows a small net for the first plies of the play-out, then the rule
-     * policy. Per declared-deal A/B vs the rule play-out (pts/deal):
-     * suit deals, 4 plies ~+0.2 (seeds 99/100); mull deals, 4 plies ~+0.35
-     * (3 seeds, 9000 deals), 8 plies +0.68 and +0.81 (seeds 102/103, 3000
-     * deals each, both CIs clear of 0). Cost on
-     * one desktop core ~94 ms/move at 4 plies, ~174 ms at 8 (rule play-out
-     * 8 ms). Two handles of the same 0.5 MB net, one per ply count. 0 when
-     * the asset is missing or bad: the rule play-out then runs alone.
+     * follows a small net for the first [netPlies] plies of the play-out, then
+     * the rule policy. Per declared-deal A/B vs the rule play-out (pts/deal):
+     * mull deals, 8 plies +0.68 and +0.81 (2 x 3000 deals), 4 plies ~+0.35;
+     * suit deals, 4 plies ~+0.2. Cost on one desktop core ~94 ms/move at 4
+     * plies, ~174 ms at 8 (rule play-out alone 8 ms).
+     *
+     * One native handle per ply count (the handle carries its plies), so a
+     * setting change never touches a handle a move is using. Empty when the
+     * asset is missing or bad: the rule play-out then runs alone.
      */
-    private fun loadFastNet(context: Context, plies: Int): Long = if (!FAST_PLAYOUT) 0L else runCatching {
-        val net = NativeGame.nativeFastNetLoad(
-            ModelFiles.install(context, FAST_NET_FILE, "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.").path)
-        if (net != 0L) NativeGame.nativeFastNetSetPlies(net, plies)
-        net
-    }.getOrDefault(0L)
-    private val fastNetSuit: Long = loadFastNet(context, FAST_PLIES_SUIT)
-    private val fastNetMull: Long = loadFastNet(context, FAST_PLIES_MULL)
+    private val fastNets: Map<Int, Long> = PLY_CHOICES.filter { it > 0 }.mapNotNull { plies ->
+        runCatching {
+            val net = NativeGame.nativeFastNetLoad(ModelFiles.install(context, FAST_NET_FILE,
+                "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.").path)
+            if (net == 0L) null else { NativeGame.nativeFastNetSetPlies(net, plies); plies to net }
+        }.getOrNull()
+    }.toMap()
+
+    /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
+    @Volatile var netPlies: Int = 0
+
+    /** True when the play-out net loaded, so [netPlies] has an effect. */
+    val hasFastNet: Boolean get() = fastNets.isNotEmpty()
 
     /**
      * The deal's calls. [declUs]/[declThem] = the declaring team's and the
@@ -88,8 +94,7 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
         for (s in scores) q[s.card] = s.value
         lap(2)
         val extra = if (state.doubled) doubleWeights(worlds, state, calls) else null; lap(3)
-        val card = game.ruleChooseWorlds(
-            worlds, belief, q, extra, values, if (mull) fastNetMull else fastNetSuit); lap(4)
+        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies] ?: 0L); lap(4)
         return card
     }
 
@@ -146,17 +151,14 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
 
     override fun close() {
         beliefTrump.close(); beliefMull.close(); mullQ.close()
-        if (fastNetSuit != 0L) NativeGame.nativeFastNetFree(fastNetSuit)
-        if (fastNetMull != 0L) NativeGame.nativeFastNetFree(fastNetMull)
+        fastNets.values.forEach { NativeGame.nativeFastNetFree(it) }
     }
 
     companion object {
         const val N_WORLDS = 400
-        // off until the hybrid play-out is timed on a phone (budget < 0.5 s/move)
-        const val FAST_PLAYOUT = false
         const val FAST_NET_FILE = "manille_fast_policy_v1.bin"
-        const val FAST_PLIES_SUIT = 4
-        const val FAST_PLIES_MULL = 8
+        /** The selectable play-out depths (the "Bot thinking" setting). */
+        val PLY_CHOICES = listOf(0, 4, 8)
         // softmax temperature on the P(match win) scale (desktop decl_temp)
         private const val TEMP = 0.01
 

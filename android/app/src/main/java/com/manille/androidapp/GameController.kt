@@ -35,6 +35,7 @@ class GameController(context: Context) : Closeable {
         RuleBot(context.applicationContext, bot ?: error("QGRU model missing"), announceNet)
     }
     private val ruleBot = ruleResult.getOrNull().also {
+        it?.netPlies = profileStore.netPlies.takeIf { p -> p in RuleBot.PLY_CHOICES } ?: 0
         ruleResult.exceptionOrNull()?.let { e ->
             android.util.Log.w("manille", "rule agent unavailable, bots play the QGRU: ${e.message}")
         }
@@ -113,6 +114,12 @@ class GameController(context: Context) : Closeable {
     var fourColor by mutableStateOf(profileStore.fourColor); private set
     var smileys by mutableStateOf(profileStore.smileys); private set
     var animations by mutableStateOf(profileStore.animations); private set
+    /** Play-out net plies for the bots (RuleBot.PLY_CHOICES); 0 = rule play-out alone. */
+    var netPlies by mutableStateOf(profileStore.netPlies.takeIf { it in RuleBot.PLY_CHOICES } ?: 0); private set
+    /** The bots' thinking time over their recent real decisions (ms), or null before any. */
+    var botMsMean by mutableStateOf<Long?>(null); private set
+    var botMsMax by mutableStateOf<Long?>(null); private set
+    private val botMs = ArrayDeque<Long>()
     var theme by mutableStateOf(themeById(profileStore.theme)); private set
     /** The previous completed trick: cards, players, winner (for "Last trick"). */
     var lastTrickCards by mutableStateOf<List<Int>>(emptyList()); private set
@@ -165,6 +172,16 @@ class GameController(context: Context) : Closeable {
         if (phase == TablePhase.LOBBY) message = tr("Choose a table to start.", "Kies een tafel om te beginnen.")
     }
     fun enableAnimations(on: Boolean) { profileStore.setAnimations(on); animations = on }
+    val playoutNetAvailable: Boolean get() = ruleBot?.hasFastNet == true
+    fun setPlayoutPlies(plies: Int) {
+        if (plies !in RuleBot.PLY_CHOICES) return
+        profileStore.setNetPlies(plies); netPlies = plies; ruleBot?.netPlies = plies
+        botMs.clear(); botMsMean = null; botMsMax = null
+    }
+    private fun recordBotMs(ms: Long) {
+        botMs.addLast(ms); while (botMs.size > 24) botMs.removeFirst()
+        botMsMean = botMs.sum() / botMs.size; botMsMax = botMs.max()
+    }
     fun enableSmileys(on: Boolean) { profileStore.setSmileys(on); smileys = on; if (!on) reactions = emptyMap() }
 
     // ---- bot reactions ------------------------------------------------------
@@ -721,8 +738,12 @@ class GameController(context: Context) : Closeable {
         val copy = game.copy()
         val calls = RuleBot.Calls(dealer, meegaanSeat, terugSeat, declUs, declThem, trumpRuleKnown, setOf(HUMAN))
         worker.execute {
+            val decision = copy.legalCards().size > 1
+            val t0 = android.os.SystemClock.elapsedRealtime()
             val card = try { model.choose(copy, calls) } catch (error: Exception) { -1 } finally { copy.close() }
+            val ms = android.os.SystemClock.elapsedRealtime() - t0
             handler.post {
+                if (decision && card >= 0) recordBotMs(ms)
                 if (token != turnToken) return@post
                 val wait = (BOT_THINK_MS - (android.os.SystemClock.uptimeMillis() - started)).coerceAtLeast(0L)
                 schedule(wait) {
