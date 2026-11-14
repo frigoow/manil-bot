@@ -26,9 +26,8 @@ over the old one and keep your profiles, statistics and saved game.
 - **Hints**: the bot's own analysis of your position -- every legal card with
   how much it likes it -- and the same for declarations and knocks.
 - **Bot thinking**: by default the regular bot; optionally a learned net
-  plays the first 4 or 8 cards of every simulated deal (optionally on to the
-  end of that trick) -- stronger in tests, slower, with the measured thinking
-  time shown next to the setting.
+  plays the first 1 or 2 tricks of every simulated deal -- stronger in tests,
+  slower, with the measured thinking time shown next to the setting.
 - The **last trick**, **statistics** per profile, a saved game you can resume,
   six table themes, and bots that react to the game -- including a partner who
   lets you know when you threw away a ten.

@@ -55,8 +55,8 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
 
     /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
     @Volatile var netPlies: Int = 0
-    /** The net finishes the trick its plies end in. */
-    @Volatile var netTrickEnd: Boolean = false
+    /** The net finishes the trick its plies end in ([TRICK_END]). */
+    @Volatile var netTrickEnd: Boolean = TRICK_END
 
     /** True when the play-out net loaded, so [netPlies] has an effect. */
     val hasFastNet: Boolean get() = fastNets.isNotEmpty()
@@ -168,7 +168,14 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
     companion object {
         const val N_WORLDS = 400
         const val FAST_NET_FILE = "manille_fast_policy_v1.bin"
-        /** The selectable play-out depths (the "Bot thinking" setting). */
+        /**
+         * Hand the play-out over to the rule policy on a trick boundary: the
+         * net finishes the trick its plies end in, so "1 trick" = 4 plies
+         * rounded up to the end of a trick. Chosen by the trump A/B (scripts/
+         * declared_ab.py, tag trump_plies: k4e/k8e vs k4/k8).
+         */
+        const val TRICK_END = true
+        /** The selectable play-out depths in plies (4 per trick; the "Bot thinking" setting). */
         val PLY_CHOICES = listOf(0, 4, 8)
         // softmax temperature on the P(match win) scale (desktop decl_temp)
         private const val TEMP = 0.01

@@ -36,7 +36,6 @@ class GameController(context: Context) : Closeable {
     }
     private val ruleBot = ruleResult.getOrNull().also {
         it?.netPlies = profileStore.netPlies.takeIf { p -> p in RuleBot.PLY_CHOICES } ?: 0
-        it?.netTrickEnd = profileStore.netTrickEnd
         ruleResult.exceptionOrNull()?.let { e ->
             android.util.Log.w("manille", "rule agent unavailable, bots play the QGRU: ${e.message}")
         }
@@ -117,7 +116,6 @@ class GameController(context: Context) : Closeable {
     var animations by mutableStateOf(profileStore.animations); private set
     /** Play-out net plies for the bots (RuleBot.PLY_CHOICES); 0 = rule play-out alone. */
     var netPlies by mutableStateOf(profileStore.netPlies.takeIf { it in RuleBot.PLY_CHOICES } ?: 0); private set
-    var netTrickEnd by mutableStateOf(profileStore.netTrickEnd); private set
     /** The bots' thinking time over their recent real decisions (ms), or null before any. */
     var botMsMean by mutableStateOf<Long?>(null); private set
     var botMsMax by mutableStateOf<Long?>(null); private set
@@ -178,10 +176,6 @@ class GameController(context: Context) : Closeable {
     fun setPlayoutPlies(plies: Int) {
         if (plies !in RuleBot.PLY_CHOICES) return
         profileStore.setNetPlies(plies); netPlies = plies; ruleBot?.netPlies = plies
-        botMs.clear(); botMsMean = null; botMsMax = null
-    }
-    fun setPlayoutTrickEnd(on: Boolean) {
-        profileStore.setNetTrickEnd(on); netTrickEnd = on; ruleBot?.netTrickEnd = on
         botMs.clear(); botMsMean = null; botMsMax = null
     }
     private fun recordBotMs(ms: Long) {

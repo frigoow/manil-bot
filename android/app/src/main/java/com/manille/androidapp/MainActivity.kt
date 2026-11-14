@@ -269,8 +269,12 @@ private fun Lobby(controller: GameController, openStats: () -> Unit) {
     if (profileDialog) ProfileDialog(controller) { profileDialog = false }
 }
 
-/** Ply label for the play-out net setting: 0 = off. */
-private fun pliesLabel(plies: Int) = if (plies == 0) tr("Standard", "Standaard") else tr("$plies plies", "$plies zetten")
+/** Label for the play-out net setting, in tricks (4 plies = 1 trick); 0 = off. */
+private fun pliesLabel(plies: Int) = when (val t = plies / 4) {
+    0 -> tr("Standard", "Standaard")
+    1 -> tr("1 trick", "1 slag")
+    else -> tr("$t tricks", "$t slagen")
+}
 
 /** The bots' play-out depth with the learned net, and how long they think. */
 @Composable
@@ -278,8 +282,8 @@ private fun BotThinkingPicker(controller: GameController) = Column(Modifier.widt
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(tr("Bot thinking", "Denkwerk van de bots"), color = Ink, fontSize = 13.sp)
-            Text(tr("A learned net plays the first plies of every simulated deal: stronger, slower",
-                "Een geleerd netwerk speelt de eerste zetten van elk gesimuleerd spel: sterker, trager"),
+            Text(tr("A learned net plays the first tricks of every simulated deal: stronger, slower",
+                "Een geleerd netwerk speelt de eerste slagen van elk gesimuleerd spel: sterker, trager"),
                 color = InkDim, fontSize = 11.sp)
         }
     }
@@ -289,15 +293,6 @@ private fun BotThinkingPicker(controller: GameController) = Column(Modifier.widt
             if (i > 0) Spacer(Modifier.width(6.dp))
             LanguageChip(pliesLabel(plies), controller.netPlies == plies) { controller.setPlayoutPlies(plies) }
         }
-    }
-    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(tr("Finish the trick", "Slag afmaken"), color = if (controller.netPlies > 0) Ink else InkDim, fontSize = 13.sp)
-            Text(tr("The net plays on to the end of the trick its plies end in",
-                "Het netwerk speelt door tot de slag rond is"), color = InkDim, fontSize = 11.sp)
-        }
-        Switch(checked = controller.netTrickEnd, enabled = controller.netPlies > 0,
-            onCheckedChange = controller::setPlayoutTrickEnd)
     }
     val mean = controller.botMsMean
     Text(if (mean == null) tr("Thinking time: play a few moves to measure it", "Denktijd: speel enkele zetten om te meten")
@@ -620,7 +615,6 @@ private fun GameMenu(controller: GameController, restart: () -> Unit) {
                 onClick = { controller.enableSmileys(!controller.smileys) })
             if (controller.playoutNetAvailable) DropdownMenuItem(
                 text = { Text(tr("Bot thinking: ", "Denkwerk: ") + pliesLabel(controller.netPlies) +
-                    (if (controller.netPlies > 0 && controller.netTrickEnd) tr(", to trick end", ", slag af") else "") +
                     (controller.botMsMean?.let { " · $it ms" } ?: "")) },
                 onClick = {
                     val c = RuleBot.PLY_CHOICES
