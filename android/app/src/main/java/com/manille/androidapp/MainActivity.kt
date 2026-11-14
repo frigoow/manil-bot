@@ -1,5 +1,6 @@
 package com.manille.androidapp
 
+import com.manille.shared.*
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.material3.HorizontalDivider
@@ -112,6 +113,8 @@ private val Panel @Composable get() = LocalAppTheme.current.panel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppConfig.botNames = BuildConfig.BOT_NAMES.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        AppConfig.cafeThemeName = BuildConfig.CAFE_THEME_NAME
         setContent {
             MaterialTheme {
                 val controller = remember {
@@ -143,8 +146,8 @@ private fun ManilleApp(controller: GameController) {
     val stars = remember { val r = java.util.Random(7); List(150) { floatArrayOf(r.nextFloat(), r.nextFloat(), r.nextFloat()) } }
     Box(
         Modifier.fillMaxSize()
-            .background(if (theme.bgTop != null) Brush.verticalGradient(listOf(theme.bgTop, theme.bgBottom ?: theme.bgTop))
-                        else Brush.radialGradient(listOf(Felt2, Felt1, Felt0), radius = 1900f))
+            .background(theme.bgTop?.let { top -> Brush.verticalGradient(listOf(top, theme.bgBottom ?: top)) }
+                        ?: Brush.radialGradient(listOf(Felt2, Felt1, Felt0), radius = 1900f))
             .drawBehind {
                 if (theme.style == "cafe") {
                     surrealBackdrop()

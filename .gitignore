@@ -20,3 +20,4 @@ cpp/build/
 # Signing keys never belong in the repository
 *.keystore
 *.jks
+android/shared/build/

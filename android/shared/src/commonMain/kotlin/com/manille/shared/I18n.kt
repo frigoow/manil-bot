@@ -1,4 +1,4 @@
-package com.manille.androidapp
+package com.manille.shared
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf

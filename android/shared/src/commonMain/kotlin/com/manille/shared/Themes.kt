@@ -1,4 +1,4 @@
-package com.manille.androidapp
+package com.manille.shared
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
@@ -30,8 +30,8 @@ data class AppTheme(
     val bgTop: Color? = null, val bgBottom: Color? = null,
 )
 
-val THEMES = listOf(
-    AppTheme("cafe", BuildConfig.CAFE_THEME_NAME,
+val THEMES: List<AppTheme> by lazy { listOf(
+    AppTheme("cafe", AppConfig.cafeThemeName,
         Color(0xFF8E5C3A), Color(0xFF6E4429), Color(0xFF4A2B17), Color(0xFF2A170C),
         Color(0xFFD4A24C), Color(0xFFF0CF85), Color(0xFFF6EEDD), Color(0xFFCDBFA5), Color(0xC0141C2C),
         Color(0xFFFFFBF2), Color(0xFFF2E8D5), Color(0xFF29497A), Color(0xFF0F1D36), Color(0x66D4A24C), "◉︎",
@@ -57,7 +57,7 @@ val THEMES = listOf(
         Color(0xFF242424), Color(0xFF151515), Color(0xFF070707), Color(0xFF8C6D2F),
         Color(0xFFD4AF37), Color(0xFFF2D675), Color(0xFFF4EEDC), Color(0xFFB5AC94), Color(0xB3111111),
         Color(0xFFFFFCF2), Color(0xFFEFE6CF), Color(0xFF151515), Color(0xFF000000), Color(0xAAD4AF37), "◆︎", nameNl = "Art deco"),
-)
+) }
 
 fun themeById(id: String) = THEMES.firstOrNull { it.id == id } ?: THEMES[0]  // Café is the default
 

@@ -1,5 +1,6 @@
 package com.manille.androidapp
 
+import com.manille.shared.*
 import java.io.Closeable
 
 data class BoardState(

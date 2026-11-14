@@ -1,5 +1,6 @@
 package com.manille.androidapp
 
+import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession

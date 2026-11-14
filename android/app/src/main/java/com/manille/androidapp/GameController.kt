@@ -1,5 +1,6 @@
 package com.manille.androidapp
 
+import com.manille.shared.*
 import android.content.Context
 import android.os.Handler
 import android.os.Looper

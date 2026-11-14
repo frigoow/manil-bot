@@ -1,5 +1,6 @@
 package com.manille.androidapp
 
+import com.manille.shared.*
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
