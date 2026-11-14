@@ -5,7 +5,6 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
-import java.io.Closeable
 import java.io.File
 import java.nio.FloatBuffer
 
@@ -15,7 +14,7 @@ import java.nio.FloatBuffer
  * the prior-residual softmax already applied. One file per declaration
  * kind: trump deals and no-trump (mull) deals.
  */
-class BeliefNet(context: Context, private val modelFile: String = TRUMP_FILE) : Closeable {
+class BeliefNet(context: Context, private val modelFile: String) : BeliefModel {
     private val environment = OrtEnvironment.getEnvironment()
     private val session: OrtSession
 
@@ -24,7 +23,7 @@ class BeliefNet(context: Context, private val modelFile: String = TRUMP_FILE) : 
         session = environment.createSession(model.absolutePath, OrtSession.SessionOptions())
     }
 
-    fun probabilities(observation: FloatArray): FloatArray {
+    override fun probabilities(observation: FloatArray): FloatArray {
         require(observation.size == OBS_DIM) { "Unexpected observation length ${observation.size}." }
         OnnxTensor.createTensor(
             environment, FloatBuffer.wrap(observation), longArrayOf(1, OBS_DIM.toLong()),
@@ -45,11 +44,9 @@ class BeliefNet(context: Context, private val modelFile: String = TRUMP_FILE) : 
     }
 
     private fun installModel(context: Context): File =
-        ModelFiles.install(context, modelFile, "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.")
+        ModelFiles.install(context, modelFile, AndroidPlatform.MODELS_HINT)
 
     companion object {
-        const val TRUMP_FILE = "manille_belief_v1.onnx"
-        const val MULL_FILE = "manille_belief_mull_v1.onnx"
         private const val OBS_DIM = 2492
     }
 }

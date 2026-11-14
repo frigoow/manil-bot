@@ -1,36 +1,18 @@
 package com.manille.androidapp
 
 import com.manille.shared.*
-import java.io.Closeable
-
-data class BoardState(
-    val currentPlayer: Int,
-    val trumpSuit: Int,
-    val declarer: Int,
-    val team0Points: Int,
-    val team1Points: Int,
-    val team0Tricks: Int,
-    val team1Tricks: Int,
-    val multiplier: Int,
-    val doubled: Boolean,
-    val redoubled: Boolean,
-    val announcementOpen: Boolean,
-    val finished: Boolean,
-    val trickCards: List<Int>,
-    val trickPlayers: List<Int>,
-)
 
 /** Thin Kotlin ownership wrapper; rules and encoders remain in C++. */
-class NativeGame() : Closeable {
+class NativeGame() : Engine {
     private var handle: Long = 0
 
     private constructor(handle: Long) : this() { this.handle = handle }
 
     /** Full engine state for a saved game (see [restore]). */
-    fun snapshot(): IntArray = nativeSnapshot(requireHandle())
+    override fun snapshot(): IntArray = nativeSnapshot(requireHandle())
 
     /** Replace the current deal with a saved [snapshot]. */
-    fun restore(snapshot: IntArray) {
+    override fun restore(snapshot: IntArray) {
         val restored = nativeRestore(snapshot)
         check(restored != 0L) { "Could not restore the saved game." }
         close()
@@ -38,12 +20,9 @@ class NativeGame() : Closeable {
     }
 
     /** An independent copy (for a worker thread); close it when done. */
-    fun copy(): NativeGame = NativeGame(nativeClone(requireHandle()))
+    override fun copy(): NativeGame = NativeGame(nativeClone(requireHandle()))
 
-    /** Sampled determinizations for the player to move. */
-    class Worlds(val n: Int, val current: LongArray, val dealt: LongArray)
-
-    fun sampleWorlds(trumpRuleKnown: Boolean, nWorlds: Int = 400): Worlds {
+    override fun sampleWorlds(trumpRuleKnown: Boolean, nWorlds: Int): Worlds {
         val raw = nativeSampleWorlds(requireHandle(), trumpRuleKnown, nWorlds)
         val n = raw.size / 8
         return Worlds(n, raw.copyOfRange(0, 4 * n), raw.copyOfRange(4 * n, 8 * n))
@@ -54,17 +33,18 @@ class NativeGame() : Closeable {
      * [outValues] (32, by card) receives each legal card's play-out value
      * (expected final team points); NaN elsewhere or when it did not run.
      */
-    fun ruleChooseWorlds(
+    override fun ruleChooseWorlds(
         worlds: Worlds, belief: FloatArray?, q: FloatArray?, extra: DoubleArray?,
-        outValues: DoubleArray? = null, fastNet: Long = 0L,
-    ): Int = nativeRuleChooseWorlds(requireHandle(), worlds.current, worlds.n, belief, q, extra, outValues, fastNet)
+        outValues: DoubleArray?, fastNet: FastNet?,
+    ): Int = nativeRuleChooseWorlds(requireHandle(), worlds.current, worlds.n, belief, q, extra, outValues,
+        (fastNet as? AndroidFastNet)?.handle ?: 0L)
 
-    fun newDeal(dealer: Int = 3, seed: Long = System.nanoTime(), trump: Int? = null) {
+    override fun newDeal(dealer: Int, seed: Long, trump: Int?) {
         close()
         handle = if (trump == null) nativeNewDeal(dealer, seed) else nativeNewDealWithTrump(dealer, seed, trump)
     }
 
-    fun state(): BoardState {
+    override fun state(): BoardState {
         val raw = nativeState(requireHandle())
         return BoardState(
             currentPlayer = raw[0],
@@ -84,20 +64,20 @@ class NativeGame() : Closeable {
         )
     }
 
-    fun handMask(player: Int): Long = nativeHandMask(requireHandle(), player)
+    override fun handMask(player: Int): Long = nativeHandMask(requireHandle(), player)
 
-    fun legalCards(): IntArray = nativeLegalCards(requireHandle())
+    override fun legalCards(): IntArray = nativeLegalCards(requireHandle())
 
-    fun actionFeatures(observer: Int): FloatArray = nativeActionFeatures(requireHandle(), observer)
+    override fun actionFeatures(observer: Int): FloatArray = nativeActionFeatures(requireHandle(), observer)
 
-    fun gruRaw(observer: Int): FloatArray = nativeGruRaw(requireHandle(), observer)
+    override fun gruRaw(observer: Int): FloatArray = nativeGruRaw(requireHandle(), observer)
 
-    fun gruLength(observer: Int): Long = nativeGruLength(requireHandle(), observer)
+    override fun gruLength(observer: Int): Long = nativeGruLength(requireHandle(), observer)
 
-    fun gruGlobal(observer: Int): FloatArray = nativeGruGlobal(requireHandle(), observer)
+    override fun gruGlobal(observer: Int): FloatArray = nativeGruGlobal(requireHandle(), observer)
 
     /** Encoder observation of the player to move (the belief nets' input). */
-    fun observation(observer: Int): FloatArray = nativeObservation(requireHandle(), observer)
+    override fun observation(observer: Int): FloatArray = nativeObservation(requireHandle(), observer)
 
     /**
      * Rule agent move (cpp/rule_agent.h) for the player to move. [belief] is
@@ -109,17 +89,17 @@ class NativeGame() : Closeable {
     fun ruleChoose(belief: FloatArray?, q: FloatArray?, trumpRuleKnown: Boolean, nWorlds: Int = 400): Int =
         nativeRuleChoose(requireHandle(), belief, q, trumpRuleKnown, nWorlds)
 
-    fun applyCard(card: Int) {
+    override fun applyCard(card: Int) {
         nativeApplyCard(requireHandle(), card)
     }
 
-    fun announceDouble(player: Int) = nativeAnnounceDouble(requireHandle(), player)
+    override fun announceDouble(player: Int) = nativeAnnounceDouble(requireHandle(), player)
 
-    fun announceRedouble(player: Int) = nativeAnnounceRedouble(requireHandle(), player)
+    override fun announceRedouble(player: Int) = nativeAnnounceRedouble(requireHandle(), player)
 
-    fun startPlaying() = nativeStartPlaying(requireHandle())
+    override fun startPlaying() = nativeStartPlaying(requireHandle())
 
-    fun handScore(team: Int): Int = nativeHandScore(requireHandle(), team)
+    override fun handScore(team: Int): Int = nativeHandScore(requireHandle(), team)
 
     private fun requireHandle(): Long {
         check(handle != 0L) { "Start a deal before using the game engine." }
@@ -175,4 +155,9 @@ class NativeGame() : Closeable {
         @JvmStatic private external fun nativeStartPlaying(handle: Long)
         @JvmStatic private external fun nativeHandScore(handle: Long, team: Int): Int
     }
+}
+
+/** A loaded fast play-out net (cpp/fast_policy.h), freed on close. */
+class AndroidFastNet(val handle: Long) : FastNet {
+    override fun close() = NativeGame.nativeFastNetFree(handle)
 }

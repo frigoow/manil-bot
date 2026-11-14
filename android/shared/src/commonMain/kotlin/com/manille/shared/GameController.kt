@@ -1,44 +1,57 @@
-package com.manille.androidapp
+package com.manille.shared
 
-import com.manille.shared.*
-import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.io.Closeable
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlin.math.exp
 import kotlin.random.Random
+import kotlin.time.TimeSource
 
 enum class TablePhase { LOBBY, DECLARATION, MEEGAAN, TERUG, PLAYING, HAND_OVER, MATCH_OVER }
 
 /** Local session mirroring the declaration and play lifecycle of gui/game_session.py. */
-class GameController(context: Context) : Closeable {
-    private val game = NativeGame()
-    private val appContext = context.applicationContext
-    private val profileStore = ProfileStore(appContext)
+class GameController(private val platform: Platform) : AutoCloseable {
+    private val game = platform.newEngine()
+    private val storage = platform.storage
+    private val profileStore = ProfileStore(storage)
     init { Lang.dutch = profileStore.language == "nl" }
-    private var saves = SaveStore(appContext, profileStore.activeId)
-    private var statsStore = StatsStore(appContext, profileStore.activeId)
+    private var saves = SaveStore(storage, profileStore.activeId)
+    private var statsStore = newStatsStore(profileStore.activeId)
+    private fun newStatsStore(id: String) = StatsStore(storage, id) { platform.epochMillis() }
     // this hand's tricks won by the human and 10s captured by the human's team
     private var tricksMine = 0
     private var manillesUs = 0
-    private val botResult = runCatching { QNet(context.applicationContext) }
+    private val botResult = runCatching { platform.qModel(ModelNames.Q_TRUMP) }
     private val bot = botResult.getOrNull()
-    private val declarationResult = runCatching { DeclarationNet(context.applicationContext) }
+    private val declarationResult = runCatching { platform.declarationModel() }
     private val declarationNet = declarationResult.getOrNull()
-    private val announceResult = runCatching { AnnounceNet(context.applicationContext) }
+    private val announceResult = runCatching { platform.announceModel() }
     private val announceNet = announceResult.getOrNull()
     // The rule agent (desktop GUI "Rule-based, phone config"); the plain QGRU
     // above stays as the fallback when its assets are missing.
     private val ruleResult = runCatching {
-        RuleBot(context.applicationContext, bot ?: error("QGRU model missing"), announceNet)
+        RuleBot(platform, bot ?: error("QGRU model missing"), announceNet)
     }
     private val ruleBot = ruleResult.getOrNull().also {
         it?.netPlies = profileStore.netPlies.takeIf { p -> p in RuleBot.PLY_CHOICES } ?: 0
         ruleResult.exceptionOrNull()?.let { e ->
-            android.util.Log.w("manille", "rule agent unavailable, bots play the QGRU: ${e.message}")
+            platform.log("rule agent unavailable, bots play the QGRU: ${e.message}")
         }
     }
     /** Which bot plays the other seats (lobby / header label). */
@@ -48,18 +61,24 @@ class GameController(context: Context) : Closeable {
     else ruleResult.exceptionOrNull()?.message?.let { tr("Rule agent unavailable: $it", "Regelbot niet beschikbaar: $it") }
         ?: tr("Latest on-device recurrent model · offline", "Recentste recurrente model op het toestel · offline")
 
-    // The rule agent's play-out runs here, on a copy of the game, never on
-    // the UI thread; results come back through the main handler.
-    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    // UI-side state changes run on the main thread. The rule agent's
+    // play-out runs one move at a time on a worker, on a copy of the game;
+    // its results come back to the main thread. workerLock is held for the
+    // whole of a worker job, so close() can wait for the move in flight
+    // before it frees the nets.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val workerDispatcher = Dispatchers.Default.limitedParallelism(1)
+    private val workerLock = Mutex()
+    private fun onWorker(block: () -> Unit) { scope.launch(workerDispatcher) { workerLock.withLock { block() } } }
+    private fun onMain(block: () -> Unit) { scope.launch(Dispatchers.Main) { block() } }
+    /** Runs [block] on the main thread after [ms]; not cancelled by a new turn (reactions). */
+    private fun later(ms: Long, block: () -> Unit) { scope.launch { delay(ms); block() } }
     // This deal's calls, for the rule agent's world weights.
     private var meegaanSeat: Int? = null
     private var terugSeat: Int? = null
     private var declUs = 0
     private var declThem = 0
     private var trumpRuleKnown = false
-    private val handler = Handler(Looper.getMainLooper())
-    // reactions clear on their own handler: cancelBotTurn wipes `handler`
-    private val reactionHandler = Handler(Looper.getMainLooper())
     private var dealer = 0
     private var dealSeed = 0L
     private var matchMode = true
@@ -69,17 +88,17 @@ class GameController(context: Context) : Closeable {
     // step is posted through schedule(), which cancels the previous one first,
     // so a stray extra call can never fork a second self-perpetuating loop that
     // races the first and plays the hand out in a blink.
-    private var pending: Runnable? = null
+    private var pending: Job? = null
 
     private fun schedule(delayMs: Long, action: () -> Unit) {
-        pending?.let(handler::removeCallbacks)
-        val runnable = object : Runnable {
-            override fun run() {
-                if (pending === this) { pending = null; action() }
-            }
+        pending?.cancel()
+        lateinit var job: Job
+        job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(delayMs)
+            if (pending === job) { pending = null; action() }
         }
-        pending = runnable
-        handler.postDelayed(runnable, delayMs)
+        pending = job
+        job.start()
     }
 
     var board by mutableStateOf<BoardState?>(null); private set
@@ -132,10 +151,10 @@ class GameController(context: Context) : Closeable {
     var savedGame by mutableStateOf(saveSummary()); private set
 
     /** Bot names for seats 1..3 (West, North, East), fresh for every game. */
-    var botNames by mutableStateOf(NAMES.take(3)); private set
+    var botNames by mutableStateOf(AppConfig.botNames.take(3)); private set
 
     private fun pickNames() {
-        botNames = NAMES.shuffled().take(3)
+        botNames = AppConfig.botNames.shuffled().take(3)
     }
 
     fun start(match: Boolean) {
@@ -154,8 +173,8 @@ class GameController(context: Context) : Closeable {
 
     // ---- profiles ---------------------------------------------------------
     private fun reloadProfile() {
-        saves = SaveStore(appContext, profileStore.activeId)
-        statsStore = StatsStore(appContext, profileStore.activeId)
+        saves = SaveStore(storage, profileStore.activeId)
+        statsStore = newStatsStore(profileStore.activeId)
         stats = statsStore.load(); savedGame = saveSummary()
         profiles = profileStore.profiles; profileName = profileStore.active.name
         activeProfileId = profileStore.activeId
@@ -190,7 +209,7 @@ class GameController(context: Context) : Closeable {
         if (!smileys || seat == HUMAN || seat !in 0..3) return
         val emoji = choices[Random.nextInt(choices.size)]
         reactions = reactions + (seat to emoji)
-        reactionHandler.postDelayed({ if (reactions[seat] == emoji) reactions = reactions - seat }, REACTION_MS)
+        later(REACTION_MS) { if (reactions[seat] == emoji) reactions = reactions - seat }
     }
 
     /** What the human can send: smileys, then short lines (text to mood). */
@@ -202,14 +221,14 @@ class GameController(context: Context) : Closeable {
     /** The human sends a smiley or a short line; the bots may answer. */
     fun sendReaction(text: String, lineMood: String? = null) {
         reactions = reactions + (HUMAN to text)
-        reactionHandler.postDelayed({ if (reactions[HUMAN] == text) reactions = reactions - HUMAN }, REACTION_MS)
+        later(REACTION_MS) { if (reactions[HUMAN] == text) reactions = reactions - HUMAN }
         if (!smileys) return
         val mood = lineMood ?: when (text) {
             "😏", "😎", "😂", "🤑" -> "taunt"; "😩", "😅", "🙈" -> "sad"; "👍", "👏", "🎉" -> "cheer"
             "🪤" -> "trap"; "🤝" -> "respect"; else -> null
         }
         val taunt = mood == "taunt"; val sad = mood == "sad"; val cheer = mood == "cheer"
-        reactionHandler.postDelayed({
+        later(900L) {
             when {
                 mood == "trap" -> react(if (Random.nextBoolean()) 1 else 3, "😤", "🙄", tr("Sneaky! 😤", "Vuile streek! 😤"), tr("Not falling for that", "Daar trap ik niet in"))
                 mood == "respect" -> react(Random.nextInt(1, 4), "🤝", tr("Respect 🤝", "Respect 🤝"), "GG 🤝")
@@ -218,7 +237,7 @@ class GameController(context: Context) : Closeable {
                 cheer -> if (Random.nextBoolean()) react(2, "😄", "👍", tr("Stronger together! 🙌", "Samen sterk! 🙌")) else react(1, "🙄", tr("Yeah yeah...", "Ja ja..."))
                 Random.nextInt(3) == 0 -> react(Random.nextInt(1, 4), "😄", "🙂", "😉")
             }
-        }, 900L)
+        }
     }
 
     /** ", Name" when addressing a bot, nothing for the human. */
@@ -247,7 +266,7 @@ class GameController(context: Context) : Closeable {
         val takerCard = cards[tIdx]
         val partnerOf = { p: Int -> (p + 2) % 4 }
         // who was winning the trick right after card k (the engine decides)
-        fun leaderAfter(k: Int) = players[NativeGame.trickWinner(cards.subList(0, k + 1), trump)]
+        fun leaderAfter(k: Int) = players[platform.trickWinner(cards.subList(0, k + 1), trump)]
         // all cards no longer in any hand, minus this trick: played earlier
         val inHands = (0 until 4).fold(0L) { m, q -> m or game.handMask(q) }
         val trickMask = cards.fold(0L) { m, c -> m or (1L shl c) }
@@ -318,7 +337,7 @@ class GameController(context: Context) : Closeable {
             val partner = partnerOf(taker)
             val legal = trickLegal[taker]
             val couldDuck = legal != null && legal.any { alt ->
-                alt / 8 != trump && players[NativeGame.trickWinner(cards.subList(0, tIdx) + alt, trump)] == partner }
+                alt / 8 != trump && players[platform.trickWinner(cards.subList(0, tIdx) + alt, trump)] == partner }
             if (leaderAfter(tIdx - 1) == partner && couldDuck) add(7, partner, "😠", "🤦", "🗿", tr("That one was ours already! 😠", "Die was al van ons! 😠"), tr("Why trump that?! 😤", "Waarom kopen?! 😤"))
         }
         // 4. partner smears points onto a trick that was already ours
@@ -367,28 +386,28 @@ class GameController(context: Context) : Closeable {
     }
 
     /**
-     * Debug timing (adb shell am start -n com.manille.androidapp/.MainActivity
-     * --ez bench true): the rule agent plays a few whole deals in all four
-     * seats on the worker thread; per-move stage timings go to logcat, tag
-     * manille-bench.
+     * Debug timing (Android: adb shell am start -n
+     * com.manille.androidapp/.MainActivity --ez bench true): the rule agent
+     * plays a few whole deals in all four seats on the worker; per-move stage
+     * timings go to the platform log.
      */
     fun benchmark(deals: Int = 4) {
-        val model = ruleBot ?: run { android.util.Log.w("manille-bench", "no rule agent"); return }
-        worker.execute {
+        val model = ruleBot ?: run { platform.log("bench: no rule agent"); return }
+        onWorker {
             val total = mutableListOf<Long>()
             val stages = LongArray(5)
             var doubledMoves = 0
             for (d in 0 until deals) {
-                val g = NativeGame()
+                val g = platform.newEngine()
                 g.newDeal(d % 4, 9000L + d, if (d % 4 == 3) -1 else d % 4)
                 if (d % 2 == 1) g.announceDouble((d % 4 + 1) % 4)
                 g.startPlaying()
                 val calls = RuleBot.Calls(d % 4, if (d % 2 == 1) (d % 4 + 1) % 4 else null, null,
                     0, 0, false, emptySet())
                 while (!g.state().finished) {
-                    val t0 = android.os.SystemClock.elapsedRealtime()
+                    val t0 = TimeSource.Monotonic.markNow()
                     val card = model.choose(g, calls)
-                    val ms = android.os.SystemClock.elapsedRealtime() - t0
+                    val ms = t0.elapsedNow().inWholeMilliseconds
                     if (g.legalCards().size > 1) {
                         total += ms
                         for (i in 0 until 5) stages[i] += model.lastTimings[i]
@@ -400,8 +419,8 @@ class GameController(context: Context) : Closeable {
             }
             total.sort()
             val n = total.size.coerceAtLeast(1)
-            android.util.Log.i("manille-bench",
-                "moves=$n mean=${total.sum() / n}ms median=${total[n / 2]}ms p90=${total[(n * 9) / 10]}ms " +
+            platform.log(
+                "bench: moves=$n mean=${total.sum() / n}ms median=${total[n / 2]}ms p90=${total[(n * 9) / 10]}ms " +
                 "max=${total.last()}ms | per move: sample=${stages[0] / n} belief=${stages[1] / n} " +
                 "q=${stages[2] / n} doubles=${stages[3] / n} (over all moves; $doubledMoves doubled) " +
                 "playout=${stages[4] / n}")
@@ -411,17 +430,17 @@ class GameController(context: Context) : Closeable {
     // ---- saved game -----------------------------------------------------
     private fun persist() {
         if (phase == TablePhase.LOBBY) return
-        val save = org.json.JSONObject().apply {
+        val save = buildJsonObject {
             put("match", matchMode); put("us", usScore); put("them", themScore)
             put("hand", handNumber); put("dealer", dealer); put("seed", dealSeed)
-            put("names", org.json.JSONArray(botNames))
+            put("names", JsonArray(botNames.map { JsonPrimitive(it) }))
             put("phase", phase.name); put("message", message)
             put("meegaan", meegaanSeat ?: -1); put("terug", terugSeat ?: -1)
             put("declUs", declUs); put("declThem", declThem); put("ruleTrump", trumpRuleKnown)
             put("declSummary", declarationSummary)
             put("tricksMine", tricksMine); put("manilles", manillesUs)
             put("meeSummary", meegaanSummary ?: ""); put("terSummary", terugSummary ?: "")
-            put("engine", org.json.JSONArray(game.snapshot().toList()))
+            put("engine", JsonArray(game.snapshot().map { JsonPrimitive(it) }))
         }
         saves.write(save)
     }
@@ -437,11 +456,11 @@ class GameController(context: Context) : Closeable {
         val j = saves.read() ?: return false
         return try {
             cancelBotTurn()
-            val engine = j.getJSONArray("engine")
-            game.restore(IntArray(engine.length()) { engine.getInt(it) })
+            val engine = j.optArray("engine") ?: error("no engine state")
+            game.restore(IntArray(engine.size) { engine[it].jsonPrimitive.int })
             matchMode = j.getBoolean("match"); usScore = j.getInt("us"); themScore = j.getInt("them")
             handNumber = j.getInt("hand"); dealer = j.getInt("dealer"); dealSeed = j.getLong("seed")
-            j.optJSONArray("names")?.let { a -> if (a.length() == 3) botNames = List(3) { a.getString(it) } }
+            j.optArray("names")?.let { a -> if (a.size == 3) botNames = List(3) { a[it].jsonPrimitive.content } }
             meegaanSeat = j.getInt("meegaan").takeIf { it >= 0 }
             terugSeat = j.getInt("terug").takeIf { it >= 0 }
             declUs = j.getInt("declUs"); declThem = j.getInt("declThem")
@@ -584,12 +603,12 @@ class GameController(context: Context) : Closeable {
         val copy = game.copy()
         val calls = RuleBot.Calls(dealer, meegaanSeat, terugSeat, declUs, declThem, trumpRuleKnown, setOf(HUMAN))
         message = tr("Thinking about a hint…", "Even nadenken over een hint…")
-        worker.execute {
+        onWorker {
             val values = DoubleArray(32)
             val pick = try { model.analyse(copy, calls, values) } catch (error: Exception) { -1 } finally { copy.close() }
-            handler.post {
+            onMain {
                 if (token != turnToken || phase != TablePhase.PLAYING || board?.currentPlayer != HUMAN
-                    || game.snapshot().contentHashCode() != position) return@post
+                    || game.snapshot().contentHashCode() != position) return@onMain
                 val legal = game.legalCards().toList()
                 val valued = legal.filter { !values[it].isNaN() }
                 hints = if (valued.size == legal.size && legal.isNotEmpty()) {
@@ -735,18 +754,18 @@ class GameController(context: Context) : Closeable {
     private fun startRuleBot(player: Int) {
         val model = ruleBot ?: return
         val token = turnToken
-        val started = android.os.SystemClock.uptimeMillis()
+        val started = TimeSource.Monotonic.markNow()
         val copy = game.copy()
         val calls = RuleBot.Calls(dealer, meegaanSeat, terugSeat, declUs, declThem, trumpRuleKnown, setOf(HUMAN))
-        worker.execute {
+        onWorker {
             val decision = copy.legalCards().size > 1
-            val t0 = android.os.SystemClock.elapsedRealtime()
+            val t0 = TimeSource.Monotonic.markNow()
             val card = try { model.choose(copy, calls) } catch (error: Exception) { -1 } finally { copy.close() }
-            val ms = android.os.SystemClock.elapsedRealtime() - t0
-            handler.post {
+            val ms = t0.elapsedNow().inWholeMilliseconds
+            onMain {
                 if (decision && card >= 0) recordBotMs(ms)
-                if (token != turnToken) return@post
-                val wait = (BOT_THINK_MS - (android.os.SystemClock.uptimeMillis() - started)).coerceAtLeast(0L)
+                if (token != turnToken) return@onMain
+                val wait = (BOT_THINK_MS - started.elapsedNow().inWholeMilliseconds).coerceAtLeast(0L)
                 schedule(wait) {
                     val now = board ?: return@schedule
                     if (token != turnToken || phase != TablePhase.PLAYING || trickPaused
@@ -779,7 +798,7 @@ class GameController(context: Context) : Closeable {
         val completedPlayers = if (completesTrick) before.trickPlayers.filter { it >= 0 } + before.currentPlayer else emptyList()
         // the trick's winner from its cards: on the last trick the engine
         // finishes the deal without making the winner the player to move
-        val taker = if (completesTrick) completedPlayers[NativeGame.trickWinner(completedCards, before.trumpSuit)] else -1
+        val taker = if (completesTrick) completedPlayers[platform.trickWinner(completedCards, before.trumpSuit)] else -1
         if (taker == HUMAN) tricksMine += 1
         if (taker >= 0 && teamOf(taker) == HUMAN_TEAM) manillesUs += completedCards.count { it % 8 == 7 }
         if (taker >= 0) {
@@ -892,15 +911,18 @@ class GameController(context: Context) : Closeable {
     private fun refresh() {
         board = game.state(); handMask = game.handMask(HUMAN)
         legalCards = if (phase == TablePhase.PLAYING && board?.currentPlayer == HUMAN) game.legalCards().toList() else emptyList()
-        handCounts = List(4) { java.lang.Long.bitCount(game.handMask(it)) }
+        handCounts = List(4) { game.handMask(it).countOneBits() }
     }
 
-    private fun cancelBotTurn() { turnToken += 1; pending = null; handler.removeCallbacksAndMessages(null) }
+    private fun cancelBotTurn() { turnToken += 1; pending?.cancel(); pending = null }
     override fun close() {
-        cancelBotTurn(); worker.shutdown()
-        // a move in flight still uses the nets: let it finish before closing them
-        runCatching { worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
-        ruleBot?.close(); bot?.close(); declarationNet?.close(); announceNet?.close(); game.close()
+        cancelBotTurn(); scope.cancel()
+        // a move in flight still uses the nets: free them once it is done
+        CoroutineScope(Dispatchers.Default).launch {
+            workerLock.withLock {
+                ruleBot?.close(); bot?.close(); declarationNet?.close(); announceNet?.close(); game.close()
+            }
+        }
     }
     /** Match points the finished deal gave each team (us, them). */
     fun handScores(): Pair<Int, Int> = game.handScore(HUMAN_TEAM) to game.handScore(1)
@@ -918,8 +940,6 @@ class GameController(context: Context) : Closeable {
         const val TRICK_HOLD_MS = 1400L
         const val COLLECT_MS = 380L
         const val REACTION_MS = 2600L
-        // set per build (app/build.gradle.kts, manille.botNames)
-        val NAMES = BuildConfig.BOT_NAMES.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         // hint softmax temperature, in final team points (gui/hints.py TAU_PTS)
         const val TAU_PTS = 1.0
         fun teamOf(player: Int) = player % 2

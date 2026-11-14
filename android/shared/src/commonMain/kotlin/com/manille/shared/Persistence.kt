@@ -1,21 +1,52 @@
-package com.manille.androidapp
+package com.manille.shared
 
-import com.manille.shared.*
-import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+
+// The files are the ones the Android app wrote with org.json before the
+// shared module existed (same names, same keys): an update keeps every
+// profile, statistic and saved game. The accessors read leniently, as
+// org.json's opt* did.
+
+internal fun JsonObject.prim(key: String): JsonPrimitive? = this[key] as? JsonPrimitive
+
+fun JsonObject.optInt(key: String, default: Int = 0): Int =
+    prim(key)?.let { it.intOrNull ?: it.doubleOrNull?.toInt() ?: it.content.toIntOrNull() } ?: default
+
+fun JsonObject.optLong(key: String, default: Long = 0L): Long =
+    prim(key)?.let { it.longOrNull ?: it.doubleOrNull?.toLong() ?: it.content.toLongOrNull() } ?: default
+
+fun JsonObject.optBoolean(key: String, default: Boolean = false): Boolean =
+    prim(key)?.let { it.booleanOrNull ?: it.content.toBooleanStrictOrNull() } ?: default
+
+fun JsonObject.optString(key: String, default: String = ""): String =
+    prim(key)?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.content ?: default
+
+internal fun JsonObject.req(key: String): JsonPrimitive =
+    prim(key) ?: throw NoSuchElementException("missing $key")
+
+internal fun JsonObject.getInt(key: String): Int = req(key).let { it.intOrNull ?: error("$key is not an int") }
+internal fun JsonObject.getLong(key: String): Long = req(key).let { it.longOrNull ?: error("$key is not a long") }
+internal fun JsonObject.getBoolean(key: String): Boolean = req(key).let { it.booleanOrNull ?: error("$key is not a boolean") }
+internal fun JsonObject.getString(key: String): String = req(key).content
+internal fun JsonObject.optArray(key: String): JsonArray? = this[key] as? JsonArray
+internal fun JsonObject.optObject(key: String): JsonObject? = this[key] as? JsonObject
 
 /** Atomic small-JSON files in the app's private storage. */
-private object JsonFile {
-    fun read(file: File): JSONObject? =
-        runCatching { if (file.isFile) JSONObject(file.readText()) else null }.getOrNull()
+internal class JsonFiles(private val storage: Storage) {
+    fun read(name: String): JsonObject? =
+        runCatching { storage.read(name)?.let { Json.parseToJsonElement(it).jsonObject } }.getOrNull()
 
-    fun write(file: File, value: JSONObject) {
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(value.toString())
-        if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
-    }
+    fun write(name: String, value: JsonObject) = storage.write(name, value.toString())
 }
 
 data class Profile(val id: String, val name: String)
@@ -25,8 +56,8 @@ data class Profile(val id: String, val name: String)
  * and statistics. The first run creates "You" and moves the single-profile
  * files of earlier versions into it.
  */
-class ProfileStore(private val context: Context) {
-    private val file = File(context.filesDir, "profiles.json")
+class ProfileStore(private val storage: Storage) {
+    private val files = JsonFiles(storage)
 
     var profiles: List<Profile> = emptyList(); private set
     var activeId: String = ""; private set
@@ -44,16 +75,17 @@ class ProfileStore(private val context: Context) {
     val active: Profile get() = profiles.first { it.id == activeId }
 
     private fun load() {
-        val j = JsonFile.read(file)
+        val j = files.read(FILE)
         if (j == null) {
             profiles = listOf(Profile("p1", "You")); activeId = "p1"
             // migrate the pre-profile files into the first profile
-            File(context.filesDir, "stats.json").takeIf { it.isFile }?.renameTo(File(context.filesDir, "stats_p1.json"))
-            File(context.filesDir, "savegame.json").takeIf { it.isFile }?.renameTo(File(context.filesDir, "savegame_p1.json"))
+            if (storage.exists("stats.json")) storage.rename("stats.json", "stats_p1.json")
+            if (storage.exists("savegame.json")) storage.rename("savegame.json", "savegame_p1.json")
             save(); return
         }
-        val arr = j.optJSONArray("profiles") ?: JSONArray()
-        profiles = (0 until arr.length()).map { arr.getJSONObject(it).let { p -> Profile(p.getString("id"), p.getString("name")) } }
+        profiles = (j.optArray("profiles") ?: JsonArray(emptyList())).mapNotNull { e ->
+            (e as? JsonObject)?.let { p -> Profile(p.getString("id"), p.getString("name")) }
+        }
         if (profiles.isEmpty()) profiles = listOf(Profile("p1", "You"))
         activeId = j.optString("active").takeIf { id -> profiles.any { it.id == id } } ?: profiles[0].id
         fourColor = j.optBoolean("fourColor", true)
@@ -66,9 +98,14 @@ class ProfileStore(private val context: Context) {
     }
 
     private fun save() {
-        val arr = JSONArray()
-        profiles.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
-        runCatching { JsonFile.write(file, JSONObject().put("profiles", arr).put("active", activeId).put("fourColor", fourColor).put("smileys", smileys).put("animations", animations).put("netPlies", netPlies).put("language", language).put("languageChosen", languageChosen).put("theme", theme)) }
+        val arr = JsonArray(profiles.map { buildJsonObject { put("id", it.id); put("name", it.name) } })
+        runCatching {
+            files.write(FILE, buildJsonObject {
+                put("profiles", arr); put("active", activeId); put("fourColor", fourColor)
+                put("smileys", smileys); put("animations", animations); put("netPlies", netPlies)
+                put("language", language); put("languageChosen", languageChosen); put("theme", theme)
+            })
+        }
     }
 
     fun select(id: String) { if (profiles.any { it.id == id }) { activeId = id; save() } }
@@ -89,8 +126,8 @@ class ProfileStore(private val context: Context) {
     fun delete(id: String) {
         if (profiles.size <= 1) return
         profiles = profiles.filter { it.id != id }
-        File(context.filesDir, "stats_$id.json").delete()
-        File(context.filesDir, "savegame_$id.json").delete()
+        storage.delete("stats_$id.json")
+        storage.delete("savegame_$id.json")
         if (activeId == id) activeId = profiles[0].id
         save()
     }
@@ -101,6 +138,8 @@ class ProfileStore(private val context: Context) {
     fun setNetPlies(plies: Int) { netPlies = plies; save() }
     fun setLanguage(lang: String) { language = lang; languageChosen = true; save() }
     fun setTheme(id: String) { theme = id; save() }
+
+    private companion object { const val FILE = "profiles.json" }
 }
 
 /**
@@ -108,12 +147,15 @@ class ProfileStore(private val context: Context) {
  * every settled point of a deal, read back by "Resume" in the lobby, removed
  * when the game or match is over.
  */
-class SaveStore(context: Context, profileId: String) {
-    private val file = File(context.filesDir, "savegame_$profileId.json")
+class SaveStore(private val storage: Storage, profileId: String) {
+    private val files = JsonFiles(storage)
+    private val name = "savegame_$profileId.json"
 
-    fun read(): JSONObject? = JsonFile.read(file)?.takeIf { it.optInt("version") == VERSION }
-    fun write(save: JSONObject) = runCatching { JsonFile.write(file, save.put("version", VERSION)) }
-    fun clear() { file.delete() }
+    fun read(): JsonObject? = files.read(name)?.takeIf { it.optInt("version") == VERSION }
+    fun write(save: JsonObject) = runCatching {
+        files.write(name, JsonObject(save + ("version" to JsonPrimitive(VERSION))))
+    }
+    fun clear() { storage.delete(name) }
 
     companion object { const val VERSION = 1 }
 }
@@ -134,29 +176,33 @@ data class HandRecord(
  * added without breaking old files) plus the last results. The desktop
  * profile's totals (gui/profiles.py) are a subset.
  */
-class Stats(val c: Map<String, Int>, val history: List<JSONObject>) {
+class Stats(val c: Map<String, Int>, val history: List<JsonObject>) {
     operator fun get(key: String) = c[key] ?: 0
-    fun rate(won: String, of: String): String = if (get(of) == 0) "–" else "%.0f%%".format(get(won) * 100f / get(of))
-    fun avg(sum: String, of: String): String = if (get(of) == 0) "–" else "%.1f".format(get(sum).toFloat() / get(of))
+    fun rate(won: String, of: String): String = if (get(of) == 0) "–" else "${formatFixed(get(won) * 100.0 / get(of), 0)}%"
+    fun avg(sum: String, of: String): String = if (get(of) == 0) "–" else formatFixed(get(sum).toDouble() / get(of), 1)
 }
 
-class StatsStore(context: Context, profileId: String) {
-    private val file = File(context.filesDir, "stats_$profileId.json")
+class StatsStore(storage: Storage, profileId: String, private val clock: () -> Long) {
+    private val files = JsonFiles(storage)
+    private val name = "stats_$profileId.json"
 
     fun load(): Stats {
-        val root = JsonFile.read(file) ?: JSONObject()
+        val root = files.read(name) ?: JsonObject(emptyMap())
         val c = mutableMapOf<String, Int>()
-        root.optJSONObject("counters")?.let { j -> j.keys().forEach { c[it] = j.optInt(it) } }
+        root.optObject("counters")?.let { j -> j.keys.forEach { c[it] = j.optInt(it) } }
         // the first app version kept only these totals
-        root.optJSONObject("totals")?.let { j -> j.keys().forEach { k -> c.putIfAbsent(k, j.optInt(k)) } }
-        val h = root.optJSONArray("history") ?: JSONArray()
-        return Stats(c, (0 until h.length()).map { h.getJSONObject(it) })
+        root.optObject("totals")?.let { j -> j.keys.forEach { k -> if (k !in c) c[k] = j.optInt(k) } }
+        val h = root.optArray("history") ?: JsonArray(emptyList())
+        return Stats(c, h.mapNotNull { it as? JsonObject })
     }
 
-    private fun write(c: Map<String, Int>, history: List<JSONObject>) {
-        val counters = JSONObject(); c.forEach { (k, v) -> counters.put(k, v) }
-        val arr = JSONArray(); history.takeLast(HISTORY_CAP).forEach { arr.put(it) }
-        runCatching { JsonFile.write(file, JSONObject().put("counters", counters).put("history", arr)) }
+    private fun write(c: Map<String, Int>, history: List<JsonObject>) {
+        runCatching {
+            files.write(name, buildJsonObject {
+                put("counters", JsonObject(c.mapValues { JsonPrimitive(it.value) }))
+                put("history", JsonArray(history.takeLast(HISTORY_CAP)))
+            })
+        }
     }
 
     fun recordHand(r: HandRecord): Stats {
@@ -200,8 +246,9 @@ class StatsStore(context: Context, profileId: String) {
         } else {
             add("games"); when { us > them -> add("games_won"); us < them -> add("games_lost"); else -> add("games_tied") }
         }
-        val h = s.history + JSONObject().put("t", System.currentTimeMillis() / 1000)
-            .put("mode", if (match) "match" else "game").put("us", us).put("them", them)
+        val h = s.history + buildJsonObject {
+            put("t", clock() / 1000); put("mode", if (match) "match" else "game"); put("us", us); put("them", them)
+        }
         write(c, h)
         return load()
     }
@@ -212,4 +259,20 @@ class StatsStore(context: Context, profileId: String) {
     }
 
     private companion object { const val HISTORY_CAP = 200 }
+}
+
+/**
+ * [x] with [decimals] digits after the point, rounded half up like
+ * String.format; the decimal separator follows the app language (a comma in
+ * Dutch).
+ */
+fun formatFixed(x: Double, decimals: Int): String {
+    var scale = 1L
+    repeat(decimals) { scale *= 10 }
+    val neg = x < 0
+    val v = kotlin.math.floor(kotlin.math.abs(x) * scale + 0.5).toLong()
+    val whole = v / scale
+    val frac = (v % scale).toString().padStart(decimals, '0')
+    val sep = if (Lang.dutch) "," else "."
+    return (if (neg && v != 0L) "-" else "") + whole + (if (decimals > 0) sep + frac else "")
 }

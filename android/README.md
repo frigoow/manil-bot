@@ -33,10 +33,23 @@ in git.
 | Piece | Where |
 |---|---|
 | Rules, legality, scoring | `cpp/manille_game.cpp` -- the only rules implementation; the UI asks it |
-| Bot card play | `cpp/rule_agent.cpp` + `cpp/rule_playout.cpp` (+ `cpp/fast_policy.cpp`), called by `RuleBot.kt` |
+| Bot card play | `cpp/rule_agent.cpp` + `cpp/rule_playout.cpp` (+ `cpp/fast_policy.cpp`), called by `shared/.../RuleBot.kt` |
 | World sampling | `cpp/sampler/` via `manille_mobile_sample_worlds` |
-| Belief / Q / decision networks | ONNX Runtime: `BeliefNet.kt`, `QNet.kt`, `DeclarationNet.kt`, `AnnounceNet.kt` |
-| Table, hints, stats, profiles | `MainActivity.kt`, `GameController.kt`, `Persistence.kt` |
+| Belief / Q / decision networks | ONNX Runtime: `app/.../BeliefNet.kt`, `QNet.kt`, `DeclarationNet.kt`, `AnnounceNet.kt` |
+| Table, hints, stats, profiles | `shared/.../ManilleUi.kt`, `GameController.kt`, `Persistence.kt` |
+
+The code is split in two Gradle modules:
+
+- `shared/` (Kotlin Multiplatform + Compose Multiplatform): the game session,
+  the bots' Kotlin side, storage and every screen. It has no Android or JVM
+  calls: `shared/.../Platform.kt` lists what it needs from the platform
+  (the C++ engine, the nets, files), and it also compiles for iOS
+  (`./gradlew :shared:compileKotlinIosArm64` works on Linux too).
+- `app/`: the Android shell -- `MainActivity`, `AndroidPlatform` (JNI to the
+  C++ engine, ONNX Runtime, file storage) and the native build.
+
+`./gradlew :shared:testAndroidHostTest` runs the shared tests (among them:
+files written by earlier versions still load).
 
 The local player is seat 0. A move is sampled, weighed and played out on a
 worker thread from a copy of the game, so the UI never blocks on the bot.

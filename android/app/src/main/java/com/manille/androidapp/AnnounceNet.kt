@@ -5,7 +5,6 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
-import java.io.Closeable
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
@@ -16,13 +15,13 @@ import java.nio.LongBuffer
  * from the deciding team's own perspective; `rel = (seat - dealer) % 4`
  * (1 or 3 for a meegaan, 0 or 2 for a terug).
  */
-class AnnounceNet(context: Context) : Closeable {
+class AnnounceNet(context: Context) : AnnounceModel {
     private val environment = OrtEnvironment.getEnvironment()
     private val session = environment.createSession(
         installModel(context).absolutePath, OrtSession.SessionOptions())
 
     /** `[meegaan_pass, meegaan_call, terug_pass, terug_call]` match equities. */
-    fun equities(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): FloatArray {
+    override fun equities(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): FloatArray {
         val hand = FloatArray(32) { if (handMask and (1L shl it) != 0L) 1f else 0f }
         // The graph's suit-permutation table puts no-trump at index 4; a mull
         // is declaration 4 here, never -1.
@@ -47,7 +46,7 @@ class AnnounceNet(context: Context) : Closeable {
     }
 
     /** [equities] for many hands at once (one batched run): row i = hands[i]. */
-    fun equitiesBatch(hands: LongArray, declaration: Int, rel: Int, us: Int, them: Int): Array<FloatArray> {
+    override fun equitiesBatch(hands: LongArray, declaration: Int, rel: Int, us: Int, them: Int): Array<FloatArray> {
         val n = hands.size
         if (n == 0) return emptyArray()
         val flat = FloatArray(n * 32) { if (hands[it / 32] and (1L shl (it % 32)) != 0L) 1f else 0f }
@@ -72,20 +71,8 @@ class AnnounceNet(context: Context) : Closeable {
         }
     }
 
-    fun meegaan(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): Boolean {
-        val ev = equities(handMask, declaration, rel, us, them)
-        return ev[1] > ev[0]
-    }
-
-    fun terug(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): Boolean {
-        val ev = equities(handMask, declaration, rel, us, them)
-        return ev[3] > ev[2]
-    }
-
     override fun close() = session.close()
 
     private fun installModel(context: Context): File =
-        ModelFiles.install(context, MODEL_FILE, "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.")
-
-    private companion object { const val MODEL_FILE = "manille_announce_v1.onnx" }
+        ModelFiles.install(context, ModelNames.ANNOUNCE, AndroidPlatform.MODELS_HINT)
 }

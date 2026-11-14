@@ -1,10 +1,9 @@
-package com.manille.androidapp
+package com.manille.shared
 
-import com.manille.shared.*
-import android.content.Context
-import java.io.Closeable
+import kotlin.concurrent.Volatile
 import kotlin.math.exp
 import kotlin.math.ln1p
+import kotlin.time.TimeSource
 
 /**
  * The rule agent (cpp/rule_agent.cpp, the desktop GUI's "Rule-based, phone
@@ -18,13 +17,13 @@ import kotlin.math.ln1p
  *    Same formula as learn/rule_agent.py::decl_log_weights with
  *    double_tilt='called', checked against it on the served policy.
  *
- * choose() blocks for the play-out: call it off the UI thread, on a
- * [NativeGame.copy].
+ * choose() blocks for the play-out: call it off the UI thread, on an
+ * [Engine.copy].
  */
-class RuleBot(context: Context, private val trumpQ: QNet, private val announce: AnnounceNet?) : Closeable {
-    private val beliefTrump = BeliefNet(context, BeliefNet.TRUMP_FILE)
-    private val beliefMull = BeliefNet(context, BeliefNet.MULL_FILE)
-    private val mullQ = QNet(context, QNet.MULL_MODEL_FILE)
+class RuleBot(platform: Platform, private val trumpQ: QModel, private val announce: AnnounceModel?) : AutoCloseable {
+    private val beliefTrump = platform.beliefModel(ModelNames.BELIEF_TRUMP)
+    private val beliefMull = platform.beliefModel(ModelNames.BELIEF_MULL)
+    private val mullQ = platform.qModel(ModelNames.Q_MULL)
     /**
      * The fast learned play-out (cpp/fast_policy.h): every simulated seat
      * follows a small net for the first [netPlies] plies of the play-out, then
@@ -40,18 +39,11 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
      * so a setting change never touches a handle a move is using. Empty when
      * the asset is missing or bad: the rule play-out then runs alone.
      */
-    private val fastNets: Map<Pair<Int, Boolean>, Long> = PLY_CHOICES.filter { it > 0 }
+    private val fastNets: Map<Pair<Int, Boolean>, FastNet> = PLY_CHOICES.filter { it > 0 }
         .map { plies -> plies to TRICK_END }
         .mapNotNull { key ->
-            runCatching {
-                val net = NativeGame.nativeFastNetLoad(ModelFiles.install(context, FAST_NET_FILE,
-                    "Unzip manille-app-models.zip (release models-v1) into android/app/src/main/assets/models, then rebuild.").path)
-                if (net == 0L) null else {
-                    NativeGame.nativeFastNetSetPlies(net, key.first)
-                    NativeGame.nativeFastNetSetTrickEnd(net, key.second)
-                    key to net
-                }
-            }.getOrNull()
+            runCatching { platform.fastNet(ModelNames.FAST_NET, key.first, key.second) }
+                .getOrNull()?.let { key to it }
         }.toMap()
 
     /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
@@ -81,14 +73,14 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
     /** Milliseconds of the last choose(): sample, belief, Q, doubles, play-out. */
     val lastTimings = LongArray(5)
 
-    fun choose(game: NativeGame, calls: Calls): Int = analyse(game, calls, null)
+    fun choose(game: Engine, calls: Calls): Int = analyse(game, calls, null)
 
     /**
      * The card, and into [values] (32, by card) each legal card's play-out
      * value -- expected final team points, what the desktop hint shows; NaN
      * for the other cards or when the play-out did not run.
      */
-    fun analyse(game: NativeGame, calls: Calls, values: DoubleArray?): Int {
+    fun analyse(game: Engine, calls: Calls, values: DoubleArray?): Int {
         values?.fill(Double.NaN)
         lastTimings.fill(0)
         val state = game.state()
@@ -96,8 +88,8 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
         val legal = game.legalCards()
         if (legal.size == 1) return legal[0]
         val mull = state.trumpSuit < 0
-        var t = System.nanoTime()
-        fun lap(i: Int) { val now = System.nanoTime(); lastTimings[i] = (now - t) / 1_000_000; t = now }
+        var t = TimeSource.Monotonic.markNow()
+        fun lap(i: Int) { lastTimings[i] = t.elapsedNow().inWholeMilliseconds; t = TimeSource.Monotonic.markNow() }
         val worlds = game.sampleWorlds(calls.trumpRuleKnown, N_WORLDS); lap(0)
         val belief = (if (mull) beliefMull else beliefTrump).probabilities(game.observation(me)); lap(1)
         val scores = (if (mull) mullQ else trumpQ).scoreCards(
@@ -106,12 +98,12 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
         for (s in scores) q[s.card] = s.value
         lap(2)
         val extra = if (state.doubled) doubleWeights(worlds, state, calls) else null; lap(3)
-        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies to netTrickEnd] ?: 0L); lap(4)
+        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies to netTrickEnd]); lap(4)
         return card
     }
 
     /** log P(the calls made | each world's dealt hands), or null if none apply. */
-    private fun doubleWeights(worlds: NativeGame.Worlds, state: BoardState, calls: Calls): DoubleArray? {
+    private fun doubleWeights(worlds: Worlds, state: BoardState, calls: Calls): DoubleArray? {
         val net = announce ?: return null
         val d = calls.dealer
         val n = worlds.n
@@ -163,12 +155,11 @@ class RuleBot(context: Context, private val trumpQ: QNet, private val announce: 
 
     override fun close() {
         beliefTrump.close(); beliefMull.close(); mullQ.close()
-        fastNets.values.forEach { NativeGame.nativeFastNetFree(it) }
+        fastNets.values.forEach { it.close() }
     }
 
     companion object {
         const val N_WORLDS = 400
-        const val FAST_NET_FILE = "manille_fast_policy_v1.bin"
         /**
          * Hand the play-out over to the rule policy on a trick boundary: the
          * net finishes the trick its plies end in, so "1 trick" = 4 plies

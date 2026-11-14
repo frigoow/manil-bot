@@ -78,17 +78,9 @@ android {
 }
 
 dependencies {
+    // the game, its screens and Compose come in through :shared
     implementation(project(":shared"))
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
-    implementation(composeBom)
-    androidTestImplementation(composeBom)
-
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
 }
