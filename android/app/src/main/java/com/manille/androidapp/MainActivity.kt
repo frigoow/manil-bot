@@ -10,6 +10,8 @@ import com.manille.shared.ManilleRoot
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReport.install(this)
+        if (savedInstanceState == null) CrashReport.showIfAny(this)
         AppConfig.botNames = BuildConfig.BOT_NAMES.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         AppConfig.cafeThemeName = BuildConfig.CAFE_THEME_NAME
         val platform = AndroidPlatform(this)
