@@ -735,7 +735,13 @@ class GameController(private val platform: Platform) : AutoCloseable {
     private fun beginPlaying() {
         callHints = null; callHintPick = false
         game.startPlaying(); phase = TablePhase.PLAYING; refresh()
-        message = if (board?.currentPlayer == HUMAN) tr("Your turn.", "Jouw beurt.") else tr("${seatName(board?.currentPlayer ?: 0)} is thinking…", "${seatName(board?.currentPlayer ?: 0)} denkt na…")
+        val turn = if (board?.currentPlayer == HUMAN) tr("Your turn.", "Jouw beurt.") else tr("${seatName(board?.currentPlayer ?: 0)} is thinking…", "${seatName(board?.currentPlayer ?: 0)} denkt na…")
+        // A bot's knock or knock-back is decided in the same step as the
+        // human's answer: keep it on screen with the stake it set, or a ×8
+        // deal looks like a miscount at the end.
+        val calls = listOfNotNull(meegaanSummary, terugSummary)
+        message = if (calls.isEmpty()) turn
+            else tr("${calls.joinToString(", ")} — stakes ×${board?.multiplier}. $turn", "${calls.joinToString(", ")} — inzet ×${board?.multiplier}. $turn")
         persist()
         scheduleBotIfNeeded()
     }
