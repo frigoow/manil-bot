@@ -101,18 +101,18 @@ swapped, so the comparison is how two players handled *the same cards*:
 | The same network, with real declarations and knocks (as in the app) | **+1.43** [+1.18, +1.67] (3000 deals) |
 | SPARTA, a GPU search over that network | +0.14 [−0.22, +0.50] -- level (1200 deals) |
 
-**Against SPARTA, version 1.0.4** (500 trump deals; the declarations and
-knocks as in the app; "with knocks" counts the doubled scores):
+**Against SPARTA, version 1.0.4** (500 deals of each kind; the declarations
+and knocks as in the app; "with knocks" counts the doubled scores):
 
-| Bot thinking | Points per deal | With knocks |
-|---|---|---|
-| Standard (the default) | +0.31 [−0.25, +0.87] | +0.33 [−0.17, +0.84] |
-| Whole deal | **+0.81** [+0.23, +1.40] | +0.28 [−0.17, +0.74] |
+| Bot thinking | Trump deals | with knocks | Mull deals | with knocks |
+|---|---|---|---|---|
+| Standard (the default) | +0.31 [−0.25, +0.87] | +0.33 [−0.17, +0.84] | +0.27 [−0.58, +1.12] | +0.42 [−0.48, +1.33] |
+| Whole deal | **+0.81** [+0.23, +1.40] | +0.28 [−0.17, +0.74] | **+1.07** [+0.24, +1.90] | **+1.13** [+0.21, +2.06] |
 
 Level by default; on *Whole deal* the phone bot beats the strongest search
-player of the research project on points, though not yet significantly once
-the knocked deals' doubling is counted. Mull deals against SPARTA are not
-measured yet.
+player of the research project, clearly on mull deals and on trump-deal
+points (the trump result with the knocked deals' doubling counted is not yet
+significant).
 
 What the *Bot thinking* setting buys over *Standard*, each on 3000 deals
 against the network: *Whole deal* +0.37 on trump deals, +0.36 on mull deals;
