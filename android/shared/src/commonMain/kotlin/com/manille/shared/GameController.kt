@@ -147,7 +147,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     var lastTrickWinner by mutableStateOf(-1); private set
     /** Emoji reaction currently shown per bot seat. */
     var reactions by mutableStateOf<Map<Int, String>>(emptyMap()); private set
-    /** Counts the human's plays of a 7, 8, 9 or 10: each one makes the café pint toast ("Schol!"). */
+    /** Counts the tricks made of a 7, 8, 9 and 10 (any suits, anyone's): each one makes the café pint toast ("Schol!"). */
     var cheers by mutableStateOf(0); private set
     /** One-line summary of the saved game, or null when there is none. */
     var savedGame by mutableStateOf(saveSummary()); private set
@@ -570,7 +570,6 @@ class GameController(private val platform: Platform) : AutoCloseable {
             message = tr("That card is not legal now.", "Die kaart mag je nu niet spelen."); return
         }
         hints = emptyMap(); hintPick = null; applyCardWithTiming(card)
-        if (card % 8 in SCHOL_RANKS) cheers++
     }
 
     fun toggleHints() {
@@ -804,6 +803,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
         val taker = if (completesTrick) completedPlayers[platform.trickWinner(completedCards, before.trumpSuit)] else -1
         if (taker == HUMAN) tricksMine += 1
         if (taker >= 0 && teamOf(taker) == HUMAN_TEAM) manillesUs += completedCards.count { it % 8 == 7 }
+        if (completesTrick && isScholTrick(completedCards)) cheers++
         if (taker >= 0) {
             reactToTrick(completedCards, completedPlayers, taker, before)
             lastTrickCards = completedCards; lastTrickPlayers = completedPlayers; lastTrickWinner = taker
@@ -938,8 +938,6 @@ class GameController(private val platform: Platform) : AutoCloseable {
     fun playerHandMask(player: Int): Long = game.handMask(player)
 
     private companion object {
-        /** Card ids are suit * 8 + rank, ranks 7 8 9 J Q K A 10: the 7, 8, 9 and 10. */
-        private val SCHOL_RANKS = setOf(0, 1, 2, 7)
         const val HUMAN = 0; const val PARTNER = 2; const val HUMAN_TEAM = 0; const val WINNING_SCORE = 101
         const val BOT_THINK_MS = 900L
         const val TRICK_HOLD_MS = 1400L
@@ -950,3 +948,10 @@ class GameController(private val platform: Platform) : AutoCloseable {
         fun teamOf(player: Int) = player % 2
     }
 }
+
+/**
+ * A finished trick of exactly a 7, an 8, a 9 and a 10, any suits: it earns a
+ * "Schol!" (card ids are suit * 8 + rank, ranks 7 8 9 J Q K A 10).
+ */
+internal fun isScholTrick(cards: List<Int>): Boolean =
+    cards.size == 4 && cards.map { it % 8 }.toSet() == setOf(0, 1, 2, 7)

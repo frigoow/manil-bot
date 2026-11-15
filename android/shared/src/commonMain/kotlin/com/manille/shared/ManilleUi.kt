@@ -856,8 +856,8 @@ private fun TablePrompt(controller: GameController) {
 /**
  * The café theme's table props, drawn (no stock art): the player's own pint
  * and a cup of tea float above the desert, their shadows on the sand; a music
- * box plays on the sand below the bare tree. Each change of [cheers] (the
- * player put down a 7, 8, 9 or 10) raises the pint for a toast.
+ * box plays on the sand below the bare tree. Each change of [cheers] (a
+ * trick made of a 7, 8, 9 and 10) raises the pint for a toast.
  */
 @Composable
 private fun androidx.compose.foundation.layout.BoxScope.TableDecor(cheers: Int) {
