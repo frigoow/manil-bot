@@ -1,0 +1,1 @@
+"""Manille game environment implementation."""

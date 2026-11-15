@@ -1,0 +1,5 @@
+# Versions the published results were produced with (Python 3.12).
+numpy>=2.0          # 2.4.0
+torch>=2.4          # 2.9.1 (CUDA 12.8 build for SPARTA on a GPU)
+pybind11>=2.11      # 3.0.2, to build the manille_ismcts module
+pytest>=7.4         # 9.0.2

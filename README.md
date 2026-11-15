@@ -122,6 +122,8 @@ the partner's) +0.49 and +0.51 on two separate sets of mull deals; the
 defenders' trump leads from weak holdings fell from about 25 to 2 per 150
 trump deals at no measurable cost (+0.09 [−0.14, +0.32]).
 
+How to rerun these matches: [research/README.md](research/README.md).
+
 A deal splits 60 card points, so a point or two per deal is a large edge. The
 bots have never been formally measured against people.
 
@@ -183,11 +185,13 @@ to it.
 ## Repository layout
 
 ```
-android/        the app: Kotlin/Compose UI, JNI bridge, ONNX Runtime
-cpp/            the rules engine, world samplers, rule agent and play-out
+android/        the app: Kotlin Multiplatform game and UI (shared/), Android shell (app/)
+cpp/            the rules engine, world samplers, rule agent and play-out; ISMCTS
+                and the Python module for research/
 cpp/mobile/     the plain C interface the app calls through JNI
+research/       DMC training, SPARTA, the evaluation harness (research/README.md)
 scripts/        fetch_models.sh
-third_party/    the game interface from ismcsolver (MIT)
+third_party/    ismcsolver, header-only ISMCTS (MIT)
 ```
 
 **The engine is the only rules implementation.** Legality, trick resolution
@@ -195,11 +199,13 @@ and scoring live in `cpp/manille_game.cpp`; the UI, the samplers and the bots
 all ask it.
 
 The networks were trained by self-play (Deep Monte Carlo: a Q-network trained
-on full-episode returns, separate networks for trump and no-trump deals) in a
-research codebase that is not part of this repository, and exported to ONNX.
-The C++ rule agent is a port of a Python reference implementation from that
-codebase, parity-tested card for card. Code comments that mention `learn/` or
-`gui/` refer to that original code.
+on full-episode returns, separate networks for trump and no-trump deals) and
+exported to ONNX. The training code, the SPARTA search, the Python reference
+of the rule agent (parity-tested card for card against the C++) and the
+duplicate-deal harness behind the numbers above are in
+[`research/`](research/README.md), with the trained networks as a release
+download, so every result can be inspected and reproduced. Code comments that
+mention `gui/` refer to the project's desktop GUI, which is not included.
 
 ---
 

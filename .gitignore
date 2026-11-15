@@ -21,3 +21,10 @@ cpp/build/
 *.keystore
 *.jks
 android/shared/build/
+
+# Research: the networks (research/fetch_models.sh), build output and run data
+research/artifacts
+research/runs
+research/manille_ismcts*.so
+__pycache__/
+research/data/
