@@ -49,6 +49,15 @@ struct Options {
     //      guarded honours left, a cheap low card of a three-winner suit
     //      goes. On partner's trick the honour is still vetted: banking it
     //      is the percentage play
+    //  32, 64: see learn/rule_playout.py (neutral, off by default)
+    // From a Fable review of 50 mull games (2026-11-14), clairvoyant
+    // play-outs only (128, 256):
+    // 128  a team boss -- the opponents cannot beat it, partner may hold
+    //      the master -- is cashed like a master
+    // 256  nothing to cash: lead the cheapest card of the suit where
+    //      partner holds the most bosses, so partner gets in to cash them
+    // 512  establishing from a touching run: lead its lowest card (Q from
+    //      A-K-Q forces the manille just as well, and costs less captured)
     int nt_rules = 0;
     // Trump card play, bitmask (ignored at no trump; review of the play-out
     // policy against the blueprint, learn/rule_playout.py has the text):

@@ -56,6 +56,19 @@ struct Params {
     double plan_cash_risk = 0.0;
     double plan_est_ruff = 0.4;
     bool plan_est_v2 = false;
+    // no trump: establish from a touching run with its lowest card
+    bool nt_est_low_run = false;
+    // no trump, from this trick on (0 = off): the play-out may only swap a
+    // "cash master" lead for another master
+    int nt_lock_cash_from_trick = 0;
+    // defending a suit: the play-out may not turn a side-suit lead into a
+    // trump lead (user feedback: weak trump leads by defenders)
+    bool def_trump_lock = false;
+    // ... only from a weak trump holding: at most 2 trumps, at most 3 points
+    bool def_trump_lock_weak = false;
+    // softer than the lock (0 = off): such a trump lead must beat the lead
+    // tier's card by this many points before the play-out may switch to it
+    double def_trump_margin = 0.0;
     double plan_est_v2_ruff = 0.25;
     double plan_partner_top = 0.45;
     bool plan_exit_sim = true;

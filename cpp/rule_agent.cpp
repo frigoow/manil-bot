@@ -868,6 +868,9 @@ std::pair<int, std::string> Agent::lead_plan() const {
                 if (!entry)
                     continue;
                 lead = run.size() >= 2 ? run.back() : mine[0];
+            } else if (trump < 0 && P.nt_est_low_run) {
+                // Q from A-K-Q forces the manille as well and costs less
+                lead = run.size() >= 2 ? run.back() : mine[0];
             } else {
                 lead = run.size() >= 2 ? h : mine[0];
             }
@@ -1252,12 +1255,41 @@ Decision choose(const ManilleGame& game, int me, int dealer,
         }
         d.value_cards = k.legal;
         d.values = vals;
+        // late in a mull the play-out undervalues cashing: only another
+        // master may replace a "cash master" lead
+        const bool lock = P.nt_lock_cash_from_trick > 0 && k.trump < 0 && k.trick.empty()
+            && d.why.rfind("plan: cash master", 0) == 0
+            && 9 - static_cast<int>(k.hand.size()) >= P.nt_lock_cash_from_trick;
+        // defenders leading a small trump from a weak holding was the
+        // play-out's doing, twice the blueprint's rate at trick 1
+        int my_tr = 0, my_tr_pts = 0;
+        for (int c : k.hand)
+            if (suitOf(c) == k.trump) {
+                ++my_tr;
+                my_tr_pts += PTS[rankOf(c)];
+            }
+        const bool def_case = (P.def_trump_lock || P.def_trump_margin > 0) && k.trump >= 0
+            && k.trick.empty() && k.declarer != 0 && k.declarer != 2 && suitOf(choice) != k.trump
+            && (!P.def_trump_lock_weak || (my_tr <= 2 && my_tr_pts <= 3));
+        const bool def_lock = def_case && P.def_trump_lock;
+        // the margin a trump lead must clear (penalty on its value)
+        const double def_pen = def_case && !def_lock ? P.def_trump_margin : 0.0;
+        auto adj = [&](size_t ci) {
+            return vals[ci] - (suitOf(k.legal[ci]) == k.trump ? def_pen : 0.0);
+        };
         size_t bi = 0, ci_choice = 0;
+        bool have_bi = false;
         for (size_t ci = 0; ci < vals.size(); ++ci) {
-            if (vals[ci] > vals[bi])
-                bi = ci;
             if (k.legal[ci] == choice)
                 ci_choice = ci;
+            if (lock && k.legal[ci] != choice && !k.is_master(k.legal[ci]))
+                continue;
+            if (def_lock && suitOf(k.legal[ci]) == k.trump)
+                continue;
+            if (!have_bi || adj(ci) > adj(bi)) {
+                bi = ci;
+                have_bi = true;
+            }
         }
         if (k.legal[bi] != choice) {
             double m = 0.0, ww = 0.0;
@@ -1272,7 +1304,8 @@ Decision choose(const ManilleGame& game, int me, int dealer,
                 var += wts[i] * e * e;
             }
             const double se = std::sqrt(std::max(var, 1e-12) / n_eff);
-            if (m > P.playout_margin && (P.playout_z <= 0 || m > P.playout_z * se)) {
+            const double need = P.playout_margin + (suitOf(k.legal[bi]) == k.trump ? def_pen : 0.0);
+            if (m > need && (P.playout_z <= 0 || m > P.playout_z * se)) {
                 d.why += "; play-out prefers " + cstr(k.legal[bi]) + " " + fmt("%.1f", vals[bi])
                     + " vs " + fmt("%.1f", vals[ci_choice]) + " (+" + fmt("%.2f", m)
                     + "\xc2\xb1" + fmt("%.2f", se) + ")";

@@ -315,8 +315,11 @@ private:
         int best = -1;
         for (int c : side) {
             int s = suitOf(c);
+            // bit 128 (clairvoyant): a team boss -- partner may hold the
+            // master, the opponents cannot beat it -- is cashed too
             if (!isMaster(c, hand, remaining)
-                    && !((m_nt & 4) && isVoid(opps[0], s) && isVoid(opps[1], s)))
+                    && !((m_nt & 4) && isVoid(opps[0], s) && isVoid(opps[1], s))
+                    && !((m_nt & 128) && !m_opt.honest && isBoss(c, seat, hands)))
                 continue;
             if ((m_nt & 32) && holdMaster(s, hand, outside))
                 continue;
@@ -342,6 +345,28 @@ private:
                     low = c;
             if (low >= 0)
                 return low;
+        }
+        // 4c. no trump, clairvoyant: nothing to cash -- cross to partner's
+        // bosses (the suit where partner holds the most), cheapest card,
+        // so partner gets in to cash them
+        if ((m_nt & 256) && !m_opt.honest) {
+            int cross = -1;
+            std::tuple<int, int, int> ck;
+            for (int c : side) {
+                int n_boss = 0;
+                for (int pc = suitOf(c) * 8; pc < suitOf(c) * 8 + 8; ++pc)
+                    if ((hands[partner] >> pc) & 1 && isBoss(pc, partner, hands))
+                        ++n_boss;
+                if (n_boss == 0)
+                    continue;
+                auto k = std::make_tuple(-n_boss, PTS[rankOf(c)], rankOf(c));
+                if (cross < 0 || k < ck) {
+                    cross = c;
+                    ck = k;
+                }
+            }
+            if (cross >= 0)
+                return cross;
         }
         // 5. establish: guarded honour, nobody known void to ruff
         bool have_est = false;
@@ -372,6 +397,14 @@ private:
                 if (c == h - 1)
                     below_mine = true;
             int lead_card = (below_mine && rankOf(h) > 0) ? h : mine.front();
+            if ((m_nt & 512) && lead_card == h) {
+                // the lowest card of the touching run forces the higher
+                // cards out just as well under must-beat, and costs less
+                // when it is captured (Q from A-K-Q)
+                while (rankOf(lead_card) > 0
+                        && std::find(mine.begin(), mine.end(), lead_card - 1) != mine.end())
+                    --lead_card;
+            }
             int score = PTS[rankOf(h)] + static_cast<int>(mine.size()) - 2 * n_higher;
             if (!have_est || score > est_score) {
                 have_est = true;

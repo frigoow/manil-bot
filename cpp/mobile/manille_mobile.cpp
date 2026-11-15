@@ -501,6 +501,24 @@ int manille_mobile_fastnet_set_plies(ManilleFastNet* net, int32_t plies) {
     });
 }
 
+// The rule agent's settings in the app.
+static rule::Params deployed_params() {
+    rule::Params params;
+    // Deployed play-out rules (research repo, declared-deal A/Bs over
+    // 3000 deals each):
+    //  - no trump: also cash team bosses and cross to the suit where
+    //    partner holds the most bosses (bits 128 + 256): +0.49 and
+    //    +0.51 pts/deal on two fresh deal sets;
+    //  - defending a suit with a weak trump holding (<= 2 trumps,
+    //    <= 3 pts), a trump lead must beat the plan's card by 1 point:
+    //    user feedback on weak trump leads; removes ~90% of them at no
+    //    measurable cost (+0.09 [-0.14, +0.32]).
+    params.playout_nt_rules = 31 | 128 | 256;
+    params.def_trump_margin = 1.0;
+    params.def_trump_lock_weak = true;
+    return params;
+}
+
 int manille_mobile_rule_choose_worlds(const ManilleMobileGame* game, const int64_t* worlds,
                                       int32_t n_worlds, const float* belief, const float* q,
                                       const double* extra, int32_t* out_card,
@@ -524,7 +542,7 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
         for (int i = 0; i < n_worlds; ++i)
             for (int p = 0; p < 4; ++p)
                 ws[i][p] = worlds[4 * i + p];
-        rule::Params params;
+        rule::Params params = deployed_params();
         if (net) {
             params.playout_net_plies = net->plies;
             params.playout_net_trick_end = net->trick_end;
@@ -553,7 +571,7 @@ int manille_mobile_rule_choose(const ManilleMobileGame* game, const float* belie
         if (g.finished())
             return fail(MANILLE_MOBILE_ILLEGAL_MOVE, "The deal is finished.");
         auto ws = sample_worlds(g, trump_rule_known != 0, n_worlds);
-        rule::Params params;
+        rule::Params params = deployed_params();
         rule::Decision d = rule::choose(g, static_cast<int>(g.currentPlayer()), g.declarer(),
                                         ws, history_of(g), belief, q, params);
         *out_card = d.card;
