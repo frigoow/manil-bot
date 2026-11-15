@@ -147,6 +147,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     var lastTrickWinner by mutableStateOf(-1); private set
     /** Emoji reaction currently shown per bot seat. */
     var reactions by mutableStateOf<Map<Int, String>>(emptyMap()); private set
+    /** Counts the human's plays of a 7, 8, 9 or 10: each one makes the café pint toast ("Schol!"). */
+    var cheers by mutableStateOf(0); private set
     /** One-line summary of the saved game, or null when there is none. */
     var savedGame by mutableStateOf(saveSummary()); private set
 
@@ -568,6 +570,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
             message = tr("That card is not legal now.", "Die kaart mag je nu niet spelen."); return
         }
         hints = emptyMap(); hintPick = null; applyCardWithTiming(card)
+        if (card % 8 in SCHOL_RANKS) cheers++
     }
 
     fun toggleHints() {
@@ -935,6 +938,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     fun playerHandMask(player: Int): Long = game.handMask(player)
 
     private companion object {
+        /** Card ids are suit * 8 + rank, ranks 7 8 9 J Q K A 10: the 7, 8, 9 and 10. */
+        private val SCHOL_RANKS = setOf(0, 1, 2, 7)
         const val HUMAN = 0; const val PARTNER = 2; const val HUMAN_TEAM = 0; const val WINNING_SCORE = 101
         const val BOT_THINK_MS = 900L
         const val TRICK_HOLD_MS = 1400L

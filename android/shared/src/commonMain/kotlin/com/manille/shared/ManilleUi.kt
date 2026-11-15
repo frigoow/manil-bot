@@ -854,22 +854,51 @@ private fun TablePrompt(controller: GameController) {
 }
 
 /**
- * The café theme's table props, drawn (no stock art): a pint and a cup of tea float
- * above the desert, their shadows on the sand; a music box plays on the
- * sand below the bare tree.
+ * The café theme's table props, drawn (no stock art): the player's own pint
+ * and a cup of tea float above the desert, their shadows on the sand; a music
+ * box plays on the sand below the bare tree. Each change of [cheers] (the
+ * player put down a 7, 8, 9 or 10) raises the pint for a toast.
  */
 @Composable
-private fun androidx.compose.foundation.layout.BoxScope.TableDecor(tableH: Dp) {
+private fun androidx.compose.foundation.layout.BoxScope.TableDecor(cheers: Int) {
     val anim = rememberInfiniteTransition(label = "decor")
     val time by anim.animateFloat(0f, 1f, infiniteRepeatable(tween(4000, easing = LinearEasing)), label = "time")
-    // the pint and the tea stand on coasters, with contact shadows
-    Box(Modifier.align(Alignment.TopStart).offset(x = 10.dp, y = 8.dp).size(58.dp, 72.dp)) {
+    // the toast: lift, clink, set down. The count seen at first composition
+    // does not play, so coming back to the table does not toast again.
+    val schol = remember { Animatable(0f) }
+    var toasted by remember { mutableStateOf(cheers) }
+    LaunchedEffect(cheers) {
+        if (cheers == toasted) return@LaunchedEffect
+        toasted = cheers
+        schol.snapTo(0f); schol.animateTo(1f, tween(1300, easing = LinearEasing)); schol.snapTo(0f)
+    }
+    val p = schol.value
+    fun ease(x: Float) = x.coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+    val up = when { p <= 0f -> 0f; p < .25f -> ease(p / .25f); p < .7f -> 1f; else -> ease((1f - p) / .3f) }
+    // the clink: a quick forward jolt once the glass is up
+    val clink = if (p in .25f..0.7f) kotlin.math.sin((p - .25f) / .45f * 2 * kotlin.math.PI.toFloat() * 1.5f) * (1f - (p - .25f) / .45f) else 0f
+    // the player's pint, at their own corner of the table, on a coaster
+    Box(Modifier.align(Alignment.BottomStart).offset(x = 8.dp, y = (-6).dp).size(58.dp, 72.dp)) {
         Canvas(Modifier.matchParentSize()) {
-            drawOval(Color(0x55180C04), Offset(size.width * .06f, size.height * .80f), androidx.compose.ui.geometry.Size(size.width * .92f, size.height * .2f))
+            drawOval(Color(0x55180C04).copy(alpha = .33f * (1f - .7f * up)), Offset(size.width * .06f, size.height * .80f), androidx.compose.ui.geometry.Size(size.width * .92f, size.height * .2f))
             drawOval(Brush.radialGradient(listOf(Color(0xFFD9C3A0), Color(0xFFB89A70))), Offset(size.width * .04f, size.height * .76f),
                 androidx.compose.ui.geometry.Size(size.width * .92f, size.height * .2f))
         }
-        Canvas(Modifier.align(Alignment.TopCenter).size(38.dp, 62.dp)) { drawBeer(time) }
+        Canvas(Modifier.align(Alignment.TopCenter).size(38.dp, 62.dp).graphicsLayer {
+            // raised toward the table centre, pivoting on the glass's foot
+            transformOrigin = TransformOrigin(.5f, 1f)
+            translationY = -22.dp.toPx() * up
+            translationX = 6.dp.toPx() * up + 3.dp.toPx() * clink
+            rotationZ = 14f * up + 6f * clink
+            scaleX = 1f + .14f * up; scaleY = scaleX
+        }) { drawBeer(time, splash = if (p in .25f..0.75f) (p - .25f) / .5f else 0f) }
+        if (p > 0f) {
+            val a = ease((p - .22f) / .1f) * ease((.95f - p) / .15f)
+            Text(tr("Cheers!", "Schol!"), color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Black,
+                modifier = Modifier.align(Alignment.TopStart).offset(x = 38.dp, y = (-58).dp)
+                    .wrapContentSize(unbounded = true)
+                    .graphicsLayer { alpha = a; scaleX = .7f + .3f * a; scaleY = scaleX; rotationZ = -8f })
+        }
     }
     Box(Modifier.align(Alignment.TopEnd).offset(x = (-8).dp, y = 14.dp).size(64.dp, 56.dp)) {
         Canvas(Modifier.matchParentSize()) {
@@ -877,7 +906,7 @@ private fun androidx.compose.foundation.layout.BoxScope.TableDecor(tableH: Dp) {
         }
         Canvas(Modifier.matchParentSize()) { drawTea(time) }
     }
-    Canvas(Modifier.align(Alignment.CenterStart).offset(x = 8.dp, y = tableH * .27f).size(60.dp, 66.dp)) { drawMusicBox(time) }
+    Canvas(Modifier.align(Alignment.TopStart).offset(x = 10.dp, y = 8.dp).size(60.dp, 66.dp)) { drawMusicBox(time) }
     Canvas(Modifier.align(Alignment.BottomEnd).offset(x = (-8).dp, y = (-6).dp).size(104.dp, 66.dp)) { drawClockOnBook() }
     // the elephant crosses slowly below the tea
     val walk by anim.animateFloat(0f, 1f, infiniteRepeatable(tween(26000, easing = LinearEasing), RepeatMode.Reverse), label = "walk")
@@ -885,7 +914,8 @@ private fun androidx.compose.foundation.layout.BoxScope.TableDecor(tableH: Dp) {
         .graphicsLayer { scaleX = if (walk > .5f) 1f else -1f }) { drawStiltElephant(time * 4f % 1f) }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBeer(time: Float) {
+/** [splash] runs 0..1 over a toast: foam drops jump off the rim (0 = none). */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBeer(time: Float, splash: Float = 0f) {
     val w = size.width; val h = size.height
     val topY = h * .04f; val botY = h * .97f; val inset = w * .11f
     fun xl(y: Float) = inset * (y - topY) / (botY - topY)
@@ -918,6 +948,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBeer(time: Floa
     drawLine(Color.White.copy(alpha = .55f), Offset(w * .2f, h * .3f), Offset(w * .24f, h * .86f), strokeWidth = w * .06f)
     drawLine(Color.White.copy(alpha = .25f), Offset(w * .78f, h * .32f), Offset(w * .74f, h * .8f), strokeWidth = w * .03f)
     for (k in 0 until 7) drawCircle(Color.White.copy(alpha = .45f), 1.1f, Offset(w * (.3f + .07f * ((k * 5) % 7)), h * (.4f + .07f * k)))
+    if (splash > 0f) for (k in 0 until 6) {
+        // each drop flies up and out, then falls back, fading
+        val vx = (k - 2.5f) * .09f + .12f
+        val x = w * (.5f + vx * splash * 2.2f)
+        val y = topY - h * (.42f * splash - .5f * splash * splash) * (1f + .25f * (k % 3))
+        drawCircle(Color(0xFFFFFDF6).copy(alpha = (1f - splash) * .95f), w * (.045f + .015f * (k % 2)), Offset(x, y))
+    }
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTea(time: Float) {
@@ -1019,17 +1056,20 @@ private fun Table(controller: GameController, state: BoardState, sizes: Sizes, c
         .then(if (LocalAppTheme.current.style == "cafe") Modifier.drawBehind { woodGrain() } else Modifier)
         .border(8.dp, Wood, shape).padding(8.dp)) {
         BoxWithConstraints(Modifier.fillMaxSize().border(1.dp, Gold.copy(alpha = .28f), RoundedCornerShape(38.dp))) {
-            if (LocalAppTheme.current.style == "cafe") TableDecor(maxHeight)
+            val cafe = LocalAppTheme.current.style == "cafe"
+            if (cafe) TableDecor(controller.cheers)
+            // the café pint stands in the player's corner: their bubbles go beside it
+            val myBubbleX = if (cafe) 70.dp else 10.dp
             val seatH = if (sizes.compactSeats) 52.dp else 34.dp + 14.dp + sizes.seatCardW * 1.45f + 8.dp
             val seatW = if (sizes.compactSeats) 64.dp else 60.dp
             Seat(controller, state, 2, Modifier.align(Alignment.TopCenter).offset(y = 4.dp), horizontal = true, sizes = sizes)
             Seat(controller, state, 1, Modifier.align(Alignment.CenterStart).offset(x = 4.dp), horizontal = false, sizes = sizes)
             Seat(controller, state, 3, Modifier.align(Alignment.CenterEnd).offset(x = (-4).dp), horizontal = false, sizes = sizes)
             // the human's own calls: a bubble at the bottom-left of the table
-            CallBubbles(controller, state, 0, Modifier.align(Alignment.BottomStart).offset(x = 10.dp, y = (-10).dp))
+            CallBubbles(controller, state, 0, Modifier.align(Alignment.BottomStart).offset(x = myBubbleX, y = (-10).dp))
             val mine = controller.reactions[0]
             AnimatedVisibility(visible = mine != null, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomStart).offset(x = 10.dp, y = (-52).dp)) { ReactionBubble(mine ?: "") }
+                modifier = Modifier.align(Alignment.BottomStart).offset(x = myBubbleX, y = (-52).dp)) { ReactionBubble(mine ?: "") }
             // the trick: a symmetric cross around the table centre, each card
             // on its player's side (squeezed together only when space is short)
             val dv = minOf(sizes.trickH * .62f, maxHeight / 2 - seatH - 6.dp - sizes.trickH / 2).coerceAtLeast(sizes.trickH * .3f)
