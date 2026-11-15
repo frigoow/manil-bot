@@ -25,9 +25,10 @@ over the old one and keep your profiles, statistics and saved game.
 - **Dutch or English**, Dutch by default, with the game's own words.
 - **Hints**: the bot's own analysis of your position -- every legal card with
   how much it likes it -- and the same for declarations and knocks.
-- **Bot thinking**: by default the regular bot; optionally a learned net
-  plays the first 1 or 2 tricks of every simulated deal -- stronger in tests,
-  slower, with the measured thinking time shown next to the setting.
+- **Bot thinking**: by default the regular bot (*Standard*); optionally a
+  learned net plays the first 1, 2 or 3 tricks of every simulated deal, or the
+  *Whole deal* -- stronger in tests, slower, with the measured thinking time
+  shown next to the setting.
 - The **last trick**, **statistics** per profile, a saved game you can resume,
   six table themes, and bots that react to the game -- including a partner who
   lets you know when you threw away a ten.
@@ -99,6 +100,27 @@ swapped, so the comparison is how two players handled *the same cards*:
 | A DMC self-play network playing on its own | **+1.7** (4000 deals) |
 | The same network, with real declarations and knocks (as in the app) | **+1.43** [+1.18, +1.67] (3000 deals) |
 | SPARTA, a GPU search over that network | +0.14 [−0.22, +0.50] -- level (1200 deals) |
+
+**Against SPARTA, version 1.0.4** (500 trump deals; the declarations and
+knocks as in the app; "with knocks" counts the doubled scores):
+
+| Bot thinking | Points per deal | With knocks |
+|---|---|---|
+| Standard (the default) | +0.31 [−0.25, +0.87] | +0.33 [−0.17, +0.84] |
+| Whole deal | **+0.81** [+0.23, +1.40] | +0.28 [−0.17, +0.74] |
+
+Level by default; on *Whole deal* the phone bot beats the strongest search
+player of the research project on points, though not yet significantly once
+the knocked deals' doubling is counted. Mull deals against SPARTA are not
+measured yet.
+
+What the *Bot thinking* setting buys over *Standard*, each on 3000 deals
+against the network: *Whole deal* +0.37 on trump deals, +0.36 on mull deals;
+*2 tricks* about +0.75 on mull deals. Version 1.0.4's changes, on the same
+kind of test: the no-trump play-out (cash the team's sure winners, cross to
+the partner's) +0.49 and +0.51 on two separate sets of mull deals; the
+defenders' trump leads from weak holdings fell from about 25 to 2 per 150
+trump deals at no measurable cost (+0.09 [−0.14, +0.32]).
 
 A deal splits 60 card points, so a point or two per deal is a large edge. The
 bots have never been formally measured against people.
