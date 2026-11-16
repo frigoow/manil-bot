@@ -34,7 +34,8 @@ compiler (GCC or Clang; MSVC on Windows):
 
 The desktop build compiles the engine's JNI library with CMake
 (`cpp/CMakeLists.txt`, `MANILLE_JNI=ON`) for the OS it runs on; packaging
-needs a full JDK with `jpackage`. Each package can only be made on its own
+needs a full JDK with `jpackage`. Without the NDK installed, add
+`-Pmanille.skipAndroidApp=true` (leaves `:app` out). Each package can only be made on its own
 OS: `.github/workflows/desktop.yml` builds all three. Profiles and saved
 games live in `%APPDATA%\Manille`, `~/Library/Application Support/Manille` or
 `~/.local/share/manille`.

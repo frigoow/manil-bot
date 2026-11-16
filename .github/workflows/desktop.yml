@@ -52,12 +52,20 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Android SDK licences
+        # :shared's Android target needs the platform package even here;
+        # Gradle installs it once the licences are accepted
+        run: |
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -f "$sdk.bat" ]; then sdk="$sdk.bat"; fi
+          yes | "$sdk" --licenses > /dev/null || true
+
       - name: Networks
         run: MODELS_TAG=$MODELS_TAG scripts/fetch_models.sh
 
       - name: Package
         working-directory: android
-        run: ./gradlew --no-daemon :desktop:packageDistributionForCurrentOS
+        run: ./gradlew --no-daemon -Pmanille.skipAndroidApp=true :desktop:packageDistributionForCurrentOS
 
       - name: Collect
         run: |
