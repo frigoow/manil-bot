@@ -1,23 +1,17 @@
-package com.manille.androidapp
+package com.manille.jvm
 
 import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
-import android.content.Context
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
 
-/** Android inference for the exported recurrent QGRU(s, a) model. */
-class QNet(context: Context, private val modelFile: String) : QModel {
+/** ONNX Runtime inference for the exported recurrent QGRU(s, a) model. */
+class QNet(model: File) : QModel {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session: OrtSession
-
-    init {
-        val model = installModel(context)
-        session = OrtSessions.open(environment, model)
-    }
+    private val session: OrtSession = OrtSessions.open(environment, model)
 
     /** Raw Q values for the on-device hint overlay; the same model picks bots. */
     override fun scoreCards(
@@ -74,8 +68,6 @@ class QNet(context: Context, private val modelFile: String) : QModel {
         session.close()
     }
 
-    private fun installModel(context: Context): File =
-        ModelFiles.install(context, modelFile, AndroidPlatform.MODELS_HINT)
 
     companion object {
         private const val ACT_DIM = 40

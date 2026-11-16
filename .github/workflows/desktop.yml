@@ -1,0 +1,79 @@
+name: Desktop
+
+# The desktop app (android/desktop) for Windows, macOS (Apple Silicon) and
+# Linux. jpackage can only package for the OS it runs on, so each package is
+# built on its own runner: the C++ engine compiled there (MSVC, Apple clang,
+# GCC), the nets from the models release, a Java runtime bundled in.
+#
+# release.yml calls this for every version tag, after it made the release,
+# and the three packages are attached to it next to the APK. Run it by hand
+# (Actions > Desktop > Run workflow) to get them as workflow artifacts only.
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release to attach the packages to (empty for artifacts only)
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  MODELS_TAG: models-v1
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            format: msi
+            asset: Manille-Windows.msi
+          - os: macos-14            # Apple Silicon; ONNX Runtime has no Intel macOS build
+            format: dmg
+            asset: Manille-macOS.dmg
+          - os: ubuntu-latest
+            format: deb
+            asset: Manille-Linux.deb
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Networks
+        run: MODELS_TAG=$MODELS_TAG scripts/fetch_models.sh
+
+      - name: Package
+        working-directory: android
+        run: ./gradlew --no-daemon :desktop:packageDistributionForCurrentOS
+
+      - name: Collect
+        run: |
+          file=$(ls android/desktop/build/compose/binaries/main/${{ matrix.format }}/*.${{ matrix.format }} | head -1)
+          cp "$file" "${{ matrix.asset }}"
+          ls -l "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          retention-days: 14
+
+      - name: Attach to the release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" "${{ matrix.asset }}" --clobber

@@ -1,4 +1,4 @@
-package com.manille.androidapp
+package com.manille.jvm
 
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession

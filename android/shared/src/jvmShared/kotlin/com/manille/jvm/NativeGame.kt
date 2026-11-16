@@ -1,8 +1,11 @@
-package com.manille.androidapp
+package com.manille.jvm
 
 import com.manille.shared.*
 
-/** Thin Kotlin ownership wrapper; rules and encoders remain in C++. */
+/**
+ * The C++ engine through JNI (cpp/jni/jni_bridge.cpp): a thin Kotlin
+ * ownership wrapper; rules and encoders remain in C++.
+ */
 class NativeGame() : Engine {
     private var handle: Long = 0
 
@@ -37,7 +40,7 @@ class NativeGame() : Engine {
         worlds: Worlds, belief: FloatArray?, q: FloatArray?, extra: DoubleArray?,
         outValues: DoubleArray?, fastNet: FastNet?,
     ): Int = nativeRuleChooseWorlds(requireHandle(), worlds.current, worlds.n, belief, q, extra, outValues,
-        (fastNet as? AndroidFastNet)?.handle ?: 0L)
+        (fastNet as? NativeFastNet)?.handle ?: 0L)
 
     override fun newDeal(dealer: Int, seed: Long, trump: Int?) {
         close()
@@ -115,7 +118,7 @@ class NativeGame() : Engine {
 
     companion object {
         init {
-            System.loadLibrary("manille_mobile")
+            NativeLibrary.load()
         }
 
         @JvmStatic private external fun nativeNewDeal(dealer: Int, seed: Long): Long
@@ -157,7 +160,16 @@ class NativeGame() : Engine {
     }
 }
 
+/**
+ * How the JNI library gets loaded. Android finds libmanille_mobile.so in the
+ * APK by name; the desktop shell points [load] at the file it ships before
+ * the first engine is made.
+ */
+object NativeLibrary {
+    @Volatile var load: () -> Unit = { System.loadLibrary("manille_mobile") }
+}
+
 /** A loaded fast play-out net (cpp/fast_policy.h), freed on close. */
-class AndroidFastNet(val handle: Long) : FastNet {
+class NativeFastNet(val handle: Long) : FastNet {
     override fun close() = NativeGame.nativeFastNetFree(handle)
 }

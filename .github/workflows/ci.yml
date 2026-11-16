@@ -2,6 +2,7 @@ name: CI
 
 # The C++ the app runs, built and tested on the desktop (no phone, no models
 # needed): the C interface end to end, the trump rule and the world sampler.
+# Then the game sessions, played through on the desktop JVM (job sessions).
 on:
   push:
     branches: [main]
@@ -18,3 +19,20 @@ jobs:
           cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # The game sessions on the desktop JVM, with the real engine (built here
+  # through android/desktop's CMake task) and the nets from the models release:
+  # whole matches, every kind of call, a saved game carried on.
+  sessions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Networks
+        run: MODELS_TAG=models-v1 scripts/fetch_models.sh
+      - name: Test
+        working-directory: android
+        run: ./gradlew --no-daemon :shared:desktopTest :desktop:compileKotlin

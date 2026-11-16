@@ -4,30 +4,36 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.math.exp
 import kotlin.random.Random
 import kotlin.time.TimeSource
 
-enum class TablePhase { LOBBY, DECLARATION, MEEGAAN, TERUG, PLAYING, HAND_OVER, MATCH_OVER }
-
-/** Local session mirroring the declaration and play lifecycle of gui/game_session.py. */
+/**
+ * The table on screen. The game itself is played by a session (the
+ * referee: [LocalSession] offline); this class turns what it reports into
+ * what the screens show -- the table, the held trick, the messages, the
+ * bots' reactions -- and keeps the player's profiles, statistics, settings,
+ * hints and saved game.
+ *
+ * Events are handled twice: at once for the books (statistics, the saved
+ * game), then in order for the screen, where a finished trick stays on the
+ * table for a moment while later events wait their turn.
+ */
 class GameController(private val platform: Platform) : AutoCloseable {
-    private val game = platform.newEngine()
     private val storage = platform.storage
     private val profileStore = ProfileStore(storage)
     init { Lang.dutch = profileStore.language == "nl" }
@@ -61,45 +67,23 @@ class GameController(private val platform: Platform) : AutoCloseable {
     else ruleResult.exceptionOrNull()?.message?.let { tr("Rule agent unavailable: $it", "Regelbot niet beschikbaar: $it") }
         ?: tr("Latest on-device recurrent model · offline", "Recentste recurrente model op het toestel · offline")
 
-    // UI-side state changes run on the main thread. The rule agent's
-    // play-out runs one move at a time on a worker, on a copy of the game;
-    // its results come back to the main thread. workerLock is held for the
-    // whole of a worker job, so close() can wait for the move in flight
-    // before it frees the nets.
+    // UI-side state changes run on the main thread. Bots and hints think on
+    // the worker, on a copy of the game; their results come back to the main
+    // thread. The worker's lock is held for the whole of a job, so close()
+    // can wait for the job in flight before it frees the nets.
+    private val worker = Worker()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val workerDispatcher = Dispatchers.Default.limitedParallelism(1)
-    private val workerLock = Mutex()
-    private fun onWorker(block: () -> Unit) { scope.launch(workerDispatcher) { workerLock.withLock { block() } } }
+    private fun onWorker(block: () -> Unit) { scope.launch(worker.dispatcher) { worker.lock.withLock { block() } } }
     private fun onMain(block: () -> Unit) { scope.launch(Dispatchers.Main) { block() } }
     /** Runs [block] on the main thread after [ms]; not cancelled by a new turn (reactions). */
     private fun later(ms: Long, block: () -> Unit) { scope.launch { delay(ms); block() } }
-    // This deal's calls, for the rule agent's world weights.
-    private var meegaanSeat: Int? = null
-    private var terugSeat: Int? = null
-    private var declUs = 0
-    private var declThem = 0
-    private var trumpRuleKnown = false
-    private var dealer = 0
-    private var dealSeed = 0L
-    private var matchMode = true
-    private var turnToken = 0
 
-    // At most one delayed bot/trick step may ever be outstanding. Every timed
-    // step is posted through schedule(), which cancels the previous one first,
-    // so a stray extra call can never fork a second self-perpetuating loop that
-    // races the first and plays the hand out in a blink.
-    private var pending: Job? = null
-
-    private fun schedule(delayMs: Long, action: () -> Unit) {
-        pending?.cancel()
-        lateinit var job: Job
-        job = scope.launch(start = CoroutineStart.LAZY) {
-            delay(delayMs)
-            if (pending === job) { pending = null; action() }
-        }
-        pending = job
-        job.start()
+    /** The offline table. A networked one will come in through [TableSession] as well. */
+    private val session = LocalSession(platform, Bots(ruleBot, bot, declarationNet, announceNet), worker).also { s ->
+        s.listener = ::onEvent
+        s.onBotThought = ::recordBotMs
     }
+    private val table: TableSession get() = session
 
     var board by mutableStateOf<BoardState?>(null); private set
     var handMask by mutableStateOf(0L); private set
@@ -155,23 +139,29 @@ class GameController(private val platform: Platform) : AutoCloseable {
     /** Bot names for seats 1..3 (West, North, East), fresh for every game. */
     var botNames by mutableStateOf(AppConfig.botNames.take(3)); private set
 
+    // what is on screen of the table (the session may be a held trick ahead)
+    private var shown = TableView.LOBBY
+    /** Match points of the last scored deal (us, them). */
+    private var lastDeal = 0 to 0
+
     private fun pickNames() {
         botNames = AppConfig.botNames.shuffled().take(3)
     }
 
     fun start(match: Boolean) {
         pickNames()
-        matchMode = match; usScore = 0; themScore = 0; handNumber = 0; newDeal()
+        resetScreen()
+        session.start(match)
     }
 
-    val isMatch: Boolean get() = matchMode
+    val isMatch: Boolean get() = shown.match
     /** Seats that called this deal (for the table's speech bubbles). */
-    val meegaanBy: Int? get() = meegaanSeat
-    val terugBy: Int? get() = terugSeat
-    val dealerSeat: Int get() = dealer
+    val meegaanBy: Int? get() = shown.meegaanSeat
+    val terugBy: Int? get() = shown.terugSeat
+    val dealerSeat: Int get() = shown.dealer
 
     /** Start the current kind of game over (the save is replaced). */
-    fun restart() { cancelBotTurn(); saves.clear(); start(matchMode) }
+    fun restart() { saves.clear(); start(shown.match) }
 
     // ---- profiles ---------------------------------------------------------
     private fun reloadProfile() {
@@ -248,8 +238,10 @@ class GameController(private val platform: Platform) : AutoCloseable {
     /** Tricks since the bots last reacted (keeps the table from chattering). */
     private var quietTricks = 1
 
-    /** Each seat's legal cards when it played into the current trick. */
+    /** Each seat's legal cards when it played into the current trick (on screen). */
     private val trickLegal = mutableMapOf<Int, Set<Int>>()
+    /** Cards of this deal's finished tricks (on screen). */
+    private val playedCards = mutableSetOf<Int>()
 
     /**
      * What a finished trick makes the bots feel (and say). The point is
@@ -269,10 +261,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
         val partnerOf = { p: Int -> (p + 2) % 4 }
         // who was winning the trick right after card k (the engine decides)
         fun leaderAfter(k: Int) = players[platform.trickWinner(cards.subList(0, k + 1), trump)]
-        // all cards no longer in any hand, minus this trick: played earlier
-        val inHands = (0 until 4).fold(0L) { m, q -> m or game.handMask(q) }
-        val trickMask = cards.fold(0L) { m, c -> m or (1L shl c) }
-        val earlier = (0 until 32).filter { (inHands shr it) and 1L == 0L && (trickMask shr it) and 1L == 0L }.toSet()
+        // the cards of the earlier tricks
+        val earlier: Set<Int> = playedCards
 
         data class Line(val prio: Int, val seat: Int, val choices: List<String>)
         val lines = mutableListOf<Line>()
@@ -383,7 +373,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     }
 
     fun lobby() {
-        cancelBotTurn(); phase = TablePhase.LOBBY; message = tr("Choose a table to start.", "Kies een tafel om te beginnen.")
+        session.stop(); resetScreen()
+        phase = TablePhase.LOBBY; message = tr("Choose a table to start.", "Kies een tafel om te beginnen.")
         savedGame = saveSummary()
     }
 
@@ -429,21 +420,218 @@ class GameController(private val platform: Platform) : AutoCloseable {
         }
     }
 
+    // ---- the session's events: the books ---------------------------------------
+
+    /** Every event, the moment the session reports it: what must not wait for the screen. */
+    private fun onEvent(event: TableEvent, view: TableView) {
+        when (event) {
+            TableEvent.DealStarted -> {
+                tricksMine = 0; manillesUs = 0
+                declarationSummary = ""; meegaanSummary = null; terugSummary = null
+            }
+            is TableEvent.Declared -> declarationSummary =
+                if (event.seat == HUMAN) tr("You declared ${trumpSymbol(event.trump)}", "Jij koos ${trumpSymbol(event.trump)}")
+                else tr("${seatName(event.seat)} declared ${trumpSymbol(event.trump)}", "${seatName(event.seat)} koos ${trumpSymbol(event.trump)}")
+            is TableEvent.Knocked -> meegaanSummary =
+                if (event.seat == HUMAN) tr("You knocked", "Jij klopte")
+                else tr("${seatName(event.seat)} knocked", "${seatName(event.seat)} klopte")
+            is TableEvent.KnockedBack -> terugSummary =
+                if (event.seat == HUMAN) tr("You knocked back", "Jij klopte terug")
+                else tr("${seatName(event.seat)} knocked back", "${seatName(event.seat)} klopte terug")
+            is TableEvent.CardPlayed -> event.trick?.let { t ->
+                if (t.taker == HUMAN) tricksMine += 1
+                if (teamOf(t.taker) == HUMAN_TEAM) manillesUs += t.cards.count { it % 8 == 7 }
+            }
+            is TableEvent.DealScored -> { scoreDeal(event, view); show(event, view); return }
+            TableEvent.YourCall, TableEvent.PlayStarted -> {}
+        }
+        // saved where a restart can carry on: the player is asked, or cards are on the table
+        if (event is TableEvent.YourCall || event is TableEvent.PlayStarted || event is TableEvent.CardPlayed) persist()
+        show(event, view)
+    }
+
+    private fun scoreDeal(event: TableEvent.DealScored, view: TableView) {
+        lastDeal = event.usDelta to event.themDelta
+        val b = view.board ?: return
+        val mee = view.meegaanSeat; val ter = view.terugSeat
+        stats = statsStore.recordHand(HandRecord(
+            pointsUs = b.team0Points, pointsThem = b.team1Points, scoreUs = event.usDelta, scoreThem = event.themDelta,
+            tricksUs = b.team0Tricks, tricksMine = tricksMine, manillesUs = manillesUs,
+            weDeclared = teamOf(view.dealer) == HUMAN_TEAM, iDeclared = view.dealer == HUMAN, mull = b.trumpSuit < 0,
+            multiplier = b.multiplier,
+            meegaanUs = mee != null && teamOf(mee) == HUMAN_TEAM, meegaanThem = mee != null && teamOf(mee) != HUMAN_TEAM,
+            meegaanMine = mee == HUMAN,
+            terugUs = ter != null && teamOf(ter) == HUMAN_TEAM, terugThem = ter != null && teamOf(ter) != HUMAN_TEAM,
+            terugMine = ter == HUMAN,
+        ))
+        when {
+            !view.match -> stats = statsStore.recordResult(false, b.team0Points, b.team1Points)
+            view.phase == TablePhase.MATCH_OVER -> stats = statsStore.recordResult(true, view.usScore, view.themScore)
+        }
+        // a finished quick game or match has nothing left to resume
+        if (!view.match || view.phase == TablePhase.MATCH_OVER) { saves.clear(); savedGame = null } else persist()
+    }
+
+    // ---- the session's events: the screen ----------------------------------------
+
+    // Events wait here for the screen, in order; a finished trick holds the
+    // line while it rests on the table. A new game starts a new line.
+    private var screenQueue = Channel<Pair<TableEvent, TableView>>(Channel.UNLIMITED)
+    private var screenJob: Job? = null
+
+    private fun show(event: TableEvent, view: TableView) { screenQueue.trySend(event to view) }
+
+    /** Drops whatever was still waiting for the screen and clears the table. */
+    private fun resetScreen() {
+        screenJob?.cancel(); screenQueue.close()
+        val queue = Channel<Pair<TableEvent, TableView>>(Channel.UNLIMITED)
+        screenQueue = queue
+        screenJob = scope.launch { for ((event, view) in queue) present(event, view) }
+        hints = emptyMap(); hintPick = null; declarationHints = emptyMap(); declarationHintPick = null
+        callHints = null; callHintPick = false
+        heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
+        lastTrickCards = emptyList(); lastTrickPlayers = emptyList(); lastTrickWinner = -1
+        trickLegal.clear(); playedCards.clear()
+        shown = TableView.LOBBY.copy(match = shown.match)
+    }
+
+    /** Puts [view] on the table (the player's cards stay unplayable while a trick is held). */
+    private fun display(view: TableView) {
+        shown = view
+        board = view.board; handMask = view.hand; handCounts = view.handCounts
+        legalCards = if (trickPaused) emptyList() else view.legalCards
+        phase = view.phase; usScore = view.usScore; themScore = view.themScore; handNumber = view.handNumber
+    }
+
+    private fun turnMessage(view: TableView): String {
+        val seat = view.board?.currentPlayer ?: 0
+        return if (seat == HUMAN) tr("Your turn.", "Jouw beurt.") else tr("${seatName(seat)} is thinking…", "${seatName(seat)} denkt na…")
+    }
+
+    private fun stakes(view: TableView) = view.board?.multiplier
+
+    private suspend fun present(event: TableEvent, view: TableView) {
+        when (event) {
+            TableEvent.DealStarted -> {
+                hints = emptyMap(); hintPick = null; declarationHints = emptyMap(); declarationHintPick = null
+                callHints = null; callHintPick = false
+                lastTrickCards = emptyList(); lastTrickPlayers = emptyList(); lastTrickWinner = -1
+                heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
+                trickLegal.clear(); playedCards.clear()
+                display(view)
+            }
+            is TableEvent.Declared -> {
+                display(view)
+                declarationHints = emptyMap(); declarationHintPick = null
+                if (event.seat != HUMAN && event.trump < 0) react(event.seat, "😎", tr("Mull! 😎", "Mull! 😎"), tr("Mull, daring!", "Mull, durven!"))
+                message = "$declarationSummary."
+            }
+            is TableEvent.Knocked -> {
+                display(view)
+                if (event.seat == HUMAN) {
+                    react(view.dealer, "😬", "😮", tr("You dare? 😬", "Durf je? 😬"), tr("Uh oh...", "Oei oei..."))
+                    message = tr("You knock — stakes are now ×${stakes(view)}.", "Jij klopt — de inzet is nu ×${stakes(view)}.")
+                } else {
+                    react(event.seat, "😈", "😏", tr("I knock! 😈", "Ik klop! 😈"), tr("Knock knock! 😈", "Klop klop! 😈"))
+                    message = tr("$meegaanSummary — stakes are now ×${stakes(view)}.", "$meegaanSummary — de inzet is nu ×${stakes(view)}.")
+                }
+            }
+            is TableEvent.KnockedBack -> {
+                display(view)
+                if (teamOf(event.seat) == HUMAN_TEAM) view.meegaanSeat?.let { react(it, "😱", "😳", tr("Yikes 😱", "Aiai 😱"), tr("Brave!", "Da durft wel!")) }
+                else react(event.seat, "😤", "😈", tr("Knocked back! 😤", "Teruggeklopt! 😤"), tr("Bring it on!", "Kom maar op!"))
+                message = tr("$terugSummary — stakes are now ×${stakes(view)}.", "$terugSummary — de inzet is nu ×${stakes(view)}.")
+            }
+            TableEvent.YourCall -> {
+                display(view)
+                callHints = null; callHintPick = false
+                message = ""
+            }
+            TableEvent.PlayStarted -> {
+                display(view)
+                callHints = null; callHintPick = false
+                // A bot's knock or knock-back is decided in the same step as the
+                // human's answer: keep it on screen with the stake it set, or a ×8
+                // deal looks like a miscount at the end.
+                val calls = listOfNotNull(meegaanSummary, terugSummary)
+                val turn = turnMessage(view)
+                message = if (calls.isEmpty()) turn
+                    else tr("${calls.joinToString(", ")} — stakes ×${stakes(view)}. $turn", "${calls.joinToString(", ")} — inzet ×${stakes(view)}. $turn")
+            }
+            is TableEvent.CardPlayed -> presentCard(event, view)
+            is TableEvent.DealScored -> presentScore(event, view)
+        }
+    }
+
+    private suspend fun presentCard(event: TableEvent.CardPlayed, view: TableView) {
+        val trick = event.trick
+        if (trick == null) {
+            if (view.board?.trickCards?.count { it >= 0 } == 1) trickLegal.clear()
+            event.legal?.let { trickLegal[event.seat] = it }
+            display(view)
+            if (view.board?.finished != true) message = turnMessage(view)
+            return
+        }
+        event.legal?.let { trickLegal[event.seat] = it }
+        if (isScholTrick(trick.cards)) cheers++
+        reactToTrick(trick.cards, trick.players, trick.taker, trick.before)
+        playedCards += trick.cards
+        lastTrickCards = trick.cards; lastTrickPlayers = trick.players; lastTrickWinner = trick.taker
+        heldTrickCards = trick.cards; heldTrickPlayers = trick.players; trickPaused = true
+        display(view)
+        message = if (trick.taker == HUMAN) tr("You take the trick.", "Jij neemt de slag.") else tr("${seatName(trick.taker)} takes the trick.", "${seatName(trick.taker)} neemt de slag.")
+        // the cards rest, then (with animations) sweep to the winner
+        delay(TRICK_HOLD_MS - COLLECT_MS)
+        if (animations) trickCollectTo = trick.taker
+        delay(COLLECT_MS)
+        heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
+        display(view)
+        if (view.board?.finished != true) message = turnMessage(view)
+    }
+
+    private fun presentScore(event: TableEvent.DealScored, view: TableView) {
+        display(view)
+        val b0 = view.board ?: return
+        val usWon = b0.team0Points > b0.team1Points
+        val themWon = b0.team1Points > b0.team0Points
+        val mee = view.meegaanSeat; val ter = view.terugSeat
+        for (seat in 1..3) {
+            val mine = if (teamOf(seat) == HUMAN_TEAM) usWon else themWon
+            val theirs = if (teamOf(seat) == HUMAN_TEAM) themWon else usWon
+            val myPts = if (teamOf(seat) == HUMAN_TEAM) b0.team0Points else b0.team1Points
+            val myTricks = if (teamOf(seat) == HUMAN_TEAM) b0.team0Tricks else b0.team1Tricks
+            when {
+                view.phase == TablePhase.MATCH_OVER && mine -> react(seat, "🏆", tr("🏆 Champions!", "🏆 Kampioen!"), tr("We won! 🎉", "Gewonnen! 🎉"))
+                !usWon && !themWon -> react(seat, "🤝", tr("A draw! 🤝", "Gelijk! 🤝"))
+                mine && myTricks == 8 -> react(seat, "👑", tr("Every trick! 👑", "Alle slagen! 👑"))
+                mine && myPts >= 45 -> react(seat, "🥳", tr("Too strong for you 💪", "Te sterk voor jullie 💪"), tr("Next! 🥳", "Volgende! 🥳"))
+                mine -> react(seat, "🎉", "😄", "🙌", tr("We won! 🎉", "Gewonnen! 🎉"))
+                theirs && ((mee != null && teamOf(mee) == teamOf(seat)) || (ter != null && teamOf(ter) == teamOf(seat))) ->
+                    react(seat, "😡", "😤", tr("So much for knocking 😤", "Dat kloppen was niks 😤"), tr("Why did we knock?! 😡", "Waarom klopten we?! 😡"))
+                theirs && myPts <= 15 -> react(seat, "😠", "🤬", tr("That was terrible 😠", "Dat was slecht 😠"), tr("Embarrassing... 😤", "Beschamend... 😤"))
+                theirs && seat == PARTNER -> react(seat, "😠", "😤", "🤦", tr("Come on, partner! 😤", "Allez partner! 😤"), tr("Pay attention, partner 😠", "Let een beetje op, partner 😠"), tr("Better luck next time 😅", "Volgende keer beter 😅"))
+                theirs -> react(seat, "😞", "🤦", "😅", "😤", tr("Better luck next time 😅", "Volgende keer beter 😅"), tr("The cards were against us", "De kaarten zaten tegen"))
+            }
+        }
+        val winner = when {
+            usWon -> tr("You & ${seatName(2)} win this hand", "Jij & ${seatName(2)} winnen dit spel")
+            themWon -> tr("${seatName(1)} & ${seatName(3)} win this hand", "${seatName(1)} & ${seatName(3)} winnen dit spel")
+            else -> tr("This hand is a draw", "Dit spel is gelijk")
+        }
+        message = tr("$winner · hand ${b0.team0Points}–${b0.team1Points} · score +${event.usDelta} / +${event.themDelta} · match ${view.usScore}–${view.themScore}", "$winner · spel ${b0.team0Points}–${b0.team1Points} · score +${event.usDelta} / +${event.themDelta} · stand ${view.usScore}–${view.themScore}")
+    }
+
     // ---- saved game -----------------------------------------------------
+    /** The session's state plus what only the screen knows (names, summaries, this hand's books). */
     private fun persist() {
-        if (phase == TablePhase.LOBBY) return
-        val save = buildJsonObject {
-            put("match", matchMode); put("us", usScore); put("them", themScore)
-            put("hand", handNumber); put("dealer", dealer); put("seed", dealSeed)
+        val own = session.save() ?: return
+        val save = JsonObject(own + buildJsonObject {
             put("names", JsonArray(botNames.map { JsonPrimitive(it) }))
-            put("phase", phase.name); put("message", message)
-            put("meegaan", meegaanSeat ?: -1); put("terug", terugSeat ?: -1)
-            put("declUs", declUs); put("declThem", declThem); put("ruleTrump", trumpRuleKnown)
+            put("message", message)
             put("declSummary", declarationSummary)
             put("tricksMine", tricksMine); put("manilles", manillesUs)
             put("meeSummary", meegaanSummary ?: ""); put("terSummary", terugSummary ?: "")
-            put("engine", JsonArray(game.snapshot().map { JsonPrimitive(it) }))
-        }
+        })
         saves.write(save)
     }
 
@@ -457,31 +645,25 @@ class GameController(private val platform: Platform) : AutoCloseable {
     fun resume(): Boolean {
         val j = saves.read() ?: return false
         return try {
-            cancelBotTurn()
-            val engine = j.optArray("engine") ?: error("no engine state")
-            game.restore(IntArray(engine.size) { engine[it].jsonPrimitive.int })
-            matchMode = j.getBoolean("match"); usScore = j.getInt("us"); themScore = j.getInt("them")
-            handNumber = j.getInt("hand"); dealer = j.getInt("dealer"); dealSeed = j.getLong("seed")
+            resetScreen()
+            session.restore(j)
             j.optArray("names")?.let { a -> if (a.size == 3) botNames = List(3) { a[it].jsonPrimitive.content } }
-            meegaanSeat = j.getInt("meegaan").takeIf { it >= 0 }
-            terugSeat = j.getInt("terug").takeIf { it >= 0 }
-            declUs = j.getInt("declUs"); declThem = j.getInt("declThem")
-            trumpRuleKnown = j.getBoolean("ruleTrump")
             declarationSummary = j.optString("declSummary")
             tricksMine = j.optInt("tricksMine"); manillesUs = j.optInt("manilles")
             meegaanSummary = j.optString("meeSummary").ifEmpty { null }
             terugSummary = j.optString("terSummary").ifEmpty { null }
-            hints = emptyMap(); hintPick = null; declarationHints = emptyMap(); declarationHintPick = null
-            callHints = null; callHintPick = false
-            heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
-            phase = TablePhase.valueOf(j.getString("phase"))
-            message = j.optString("message")
-            refresh()
-            if (phase == TablePhase.PLAYING) {
-                if (board?.finished == true) completeHand() else afterMove()
-            }
+            // the cards of the tricks already played: in no hand and not on the table
+            val view = session.view
+            val inHands = (0 until 4).fold(0L) { m, q -> m or (table.openHand(q) ?: 0L) }
+            val onTable = view.board?.trickCards.orEmpty().filter { it >= 0 }.toSet()
+            if ((0 until 4).all { table.openHand(it) != null })
+                playedCards += (0 until 32).filter { (inHands shr it) and 1L == 0L && it !in onTable }
+            display(view)
+            message = if (view.phase == TablePhase.PLAYING && view.board?.finished != true) turnMessage(view) else j.optString("message")
+            session.resume()
             true
         } catch (error: Exception) {
+            session.stop(); resetScreen()
             saves.clear(); savedGame = null
             message = tr("The saved game could not be restored.", "Het bewaarde spel kon niet hersteld worden.")
             phase = TablePhase.LOBBY
@@ -489,79 +671,26 @@ class GameController(private val platform: Platform) : AutoCloseable {
         }
     }
 
+    // ---- the player's moves ---------------------------------------------
 
-    fun newDeal() {
-        cancelBotTurn()
-        dealer = if (handNumber == 0) Random.nextInt(4) else (dealer + 1) % 4
-        if (!matchMode) { usScore = 0; themScore = 0 }
-        dealSeed = Random.nextLong()
-        game.newDeal(dealer, dealSeed); handNumber += 1; hints = emptyMap(); hintPick = null
-        declarationHints = emptyMap(); declarationHintPick = null
-        callHints = null; callHintPick = false
-        declarationSummary = ""; meegaanSummary = null; terugSummary = null
-        meegaanSeat = null; terugSeat = null; tricksMine = 0; manillesUs = 0
-        lastTrickCards = emptyList(); lastTrickPlayers = emptyList(); lastTrickWinner = -1
-        // match score from the declaring team's side, as the calls see it
-        if (teamOf(dealer) == HUMAN_TEAM) { declUs = usScore; declThem = themScore } else { declUs = themScore; declThem = usScore }
-        // a bot dealer without the declaration net keeps the C++ trump rule
-        trumpRuleKnown = dealer != HUMAN && declarationNet == null
-        heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1; refresh()
-        if (dealer == HUMAN) {
-            phase = TablePhase.DECLARATION
-            message = ""
-            persist()
-        } else {
-            declarationNet?.let { model ->
-                val scores = if (teamOf(dealer) == HUMAN_TEAM) usScore to themScore else themScore to usScore
-                val equities = model.equities(game.handMask(dealer), scores.first, scores.second)
-                val choice = equities.indices.maxBy { equities[it] }
-                game.newDeal(dealer, dealSeed, if (choice == 4) -1 else choice)
-                if (choice == 4) react(dealer, "😎", tr("Mull! 😎", "Mull! 😎"), tr("Mull, daring!", "Mull, durven!"))
-                refresh()
-            }
-            phase = TablePhase.PLAYING
-            declarationSummary = tr("${seatName(dealer)} declared ${trumpSymbol(board?.trumpSuit ?: -1)}", "${seatName(dealer)} koos ${trumpSymbol(board?.trumpSuit ?: -1)}")
-            message = "$declarationSummary."
-            afterDeclaration()
-        }
-    }
+    /** The next deal, after a hand is over. */
+    fun newDeal() { session.newDeal() }
 
     fun declare(trump: Int) {
         if (phase != TablePhase.DECLARATION) return
-        game.newDeal(dealer, dealSeed, trump); refresh()
-        declarationHints = emptyMap(); declarationHintPick = null
-        declarationSummary = tr("You declared ${trumpSymbol(trump)}", "Jij koos ${trumpSymbol(trump)}")
-        message = "$declarationSummary."; afterDeclaration()
+        table.declare(trump)
     }
 
     fun answerMeegaan(accept: Boolean) {
         if (phase != TablePhase.MEEGAAN) return
         callHints = null; callHintPick = false
-        if (accept) {
-            game.announceDouble(HUMAN); refresh(); meegaanSeat = HUMAN
-            react(dealer, "😬", "😮", tr("You dare? 😬", "Durf je? 😬"), tr("Uh oh...", "Oei oei..."))
-            meegaanSummary = tr("You knocked", "Jij klopte")
-            message = tr("You knock — stakes are now ×${board?.multiplier}.", "Jij klopt — de inzet is nu ×${board?.multiplier}.")
-            botsKnockBack()
-        } else if ((dealer + 3) % 4 == PARTNER) {
-            // the human passed first; the partner bot still gets its say
-            partnerKnocks()
-        }
-        beginPlaying()
+        table.answerMeegaan(accept)
     }
 
     fun answerTerug(accept: Boolean) {
         if (phase != TablePhase.TERUG) return
         callHints = null; callHintPick = false
-        if (accept) {
-            game.announceRedouble(HUMAN); refresh(); terugSeat = HUMAN; terugSummary = tr("You knocked back", "Jij klopte terug")
-            meegaanSeat?.let { react(it, "😱", "😳", tr("Yikes 😱", "Aiai 😱"), tr("Brave!", "Da durft wel!")) }
-            message = tr("$terugSummary — stakes are now ×${board?.multiplier}.", "$terugSummary — de inzet is nu ×${board?.multiplier}.")
-        } else if (dealer == HUMAN) {
-            // the human dealt and passed; the partner bot still gets its say
-            partnerKnocksBack()
-        }
-        beginPlaying()
+        table.answerTerug(accept)
     }
 
     fun playHuman(card: Int) {
@@ -569,18 +698,25 @@ class GameController(private val platform: Platform) : AutoCloseable {
         if (phase != TablePhase.PLAYING || snapshot.currentPlayer != HUMAN || card !in legalCards) {
             message = tr("That card is not legal now.", "Die kaart mag je nu niet spelen."); return
         }
-        hints = emptyMap(); hintPick = null; applyCardWithTiming(card)
+        hints = emptyMap(); hintPick = null
+        // no second card while the session's answer is on its way to the screen
+        legalCards = emptyList()
+        if (!table.play(card)) { legalCards = shown.legalCards; message = tr("That card is not legal now.", "Die kaart mag je nu niet spelen.") }
     }
+
+    // ---- hints ------------------------------------------------------------
 
     fun toggleHints() {
         val snapshot = board ?: return
-        if (phase != TablePhase.PLAYING || snapshot.currentPlayer != HUMAN) return
+        if (phase != TablePhase.PLAYING || snapshot.currentPlayer != HUMAN || trickPaused) return
         if (hints.isNotEmpty()) { hints = emptyMap(); hintPick = null; return }
+        val position = table.hintPosition() ?: return
         countHint()
         val rule = ruleBot
-        if (rule != null) { ruleHints(rule); return }
-        val model = bot ?: return
-        hints = run {
+        if (rule != null) { ruleHints(rule, position); return }
+        val model = bot ?: run { position.engine.close(); return }
+        val game = position.engine
+        hints = try {
             val scores = model.scoreCards(game.gruRaw(HUMAN), game.gruLength(HUMAN), game.gruGlobal(HUMAN),
                 game.actionFeatures(HUMAN), game.legalCards())
             val top = scores.maxOf { it.value }
@@ -590,7 +726,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
             val total = weights.sum().coerceAtLeast(.0001f)
             hintPick = scores.maxBy { it.value }.card
             scores.indices.associate { scores[it].card to (weights[it] / total * 100f) }
-        }
+        } finally { game.close() }
     }
 
     /**
@@ -599,19 +735,15 @@ class GameController(private val platform: Platform) : AutoCloseable {
      * a softmax at 1 point (TAU_PTS) over each card's play-out value. Runs on
      * the worker; dropped if the position changed meanwhile.
      */
-    private fun ruleHints(model: RuleBot) {
-        val token = turnToken
-        val position = game.snapshot().contentHashCode()
-        val copy = game.copy()
-        val calls = RuleBot.Calls(dealer, meegaanSeat, terugSeat, declUs, declThem, trumpRuleKnown, setOf(HUMAN))
+    private fun ruleHints(model: RuleBot, position: HintPosition) {
+        val copy = position.engine
         message = tr("Thinking about a hint…", "Even nadenken over een hint…")
         onWorker {
             val values = DoubleArray(32)
-            val pick = try { model.analyse(copy, calls, values) } catch (error: Exception) { -1 } finally { copy.close() }
+            val pick = try { model.analyse(copy, position.calls, values) } catch (error: Exception) { -1 } finally { copy.close() }
             onMain {
-                if (token != turnToken || phase != TablePhase.PLAYING || board?.currentPlayer != HUMAN
-                    || game.snapshot().contentHashCode() != position) return@onMain
-                val legal = game.legalCards().toList()
+                if (phase != TablePhase.PLAYING || board?.currentPlayer != HUMAN || session.positionKey() != position.key) return@onMain
+                val legal = shown.legalCards
                 val valued = legal.filter { !values[it].isNaN() }
                 hints = if (valued.size == legal.size && legal.isNotEmpty()) {
                     val top = legal.maxOf { values[it] }
@@ -642,7 +774,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
             message = announceResult.exceptionOrNull()?.message ?: tr("Hint unavailable.", "Hint niet beschikbaar.")
             return
         }
-        val rel = (HUMAN - dealer + 4) % 4
+        val rel = (HUMAN - shown.dealer + 4) % 4
         val ev = model.equities(handMask, declarationIndex(), rel, usScore, themScore)
         val (vPass, vCall) = if (phase == TablePhase.MEEGAAN) ev[0] to ev[1] else ev[2] to ev[3]
         // Same convention as gui/hints.py _call_out: softmax of the two match
@@ -675,283 +807,34 @@ class GameController(private val platform: Platform) : AutoCloseable {
 
     fun toggleOpenCards() { showOpenCards = !showOpenCards }
 
-    private fun afterDeclaration() {
-        val declaringTeam = teamOf(dealer)
-        if (declaringTeam == HUMAN_TEAM) {
-            // Both defenders are bots; seat order from the dealer's left, first
-            // yes takes the meegaan (mirrors gui/game_session._bot_meegaan).
-            val defender = listOf((dealer + 1) % 4, (dealer + 3) % 4).firstOrNull { botMeegaan(it) }
-            if (defender != null) {
-                game.announceDouble(defender); refresh(); meegaanSeat = defender; react(defender, "😈", "😏", tr("I knock! 😈", "Ik klop! 😈"), tr("Knock knock! 😈", "Klop klop! 😈"))
-                meegaanSummary = tr("${seatName(defender)} knocked", "${seatName(defender)} klopte")
-                // Our answer: dealer first, then partner, first yes takes it.
-                // The partner bot answers before the human when it dealt.
-                if (dealer == PARTNER && partnerKnocksBack()) { beginPlaying(); return }
-                phase = TablePhase.TERUG
-                message = ""
-                persist()
-            } else beginPlaying()
-        } else {
-            // Defenders from the dealer's left, first yes takes the meegaan:
-            // the partner bot answers before the human when it sits there.
-            if ((dealer + 1) % 4 == PARTNER && partnerKnocks()) { beginPlaying(); return }
-            phase = TablePhase.MEEGAAN
-            message = ""
-            persist()
-        }
-    }
-
-    /** The partner bot's meegaan against the opponents' declaration; the
-     *  opponents (both bots) then answer it. False if it passes. */
-    private fun partnerKnocks(): Boolean {
-        if (!botMeegaan(PARTNER)) return false
-        game.announceDouble(PARTNER); refresh(); meegaanSeat = PARTNER
-        react(PARTNER, "😈", "😏", tr("I knock! 😈", "Ik klop! 😈"), tr("Knock knock! 😈", "Klop klop! 😈"))
-        meegaanSummary = tr("${seatName(PARTNER)} knocked", "${seatName(PARTNER)} klopte")
-        message = tr("$meegaanSummary — stakes are now ×${board?.multiplier}.", "$meegaanSummary — de inzet is nu ×${board?.multiplier}.")
-        botsKnockBack()
-        return true
-    }
-
-    /** The partner bot's terug against the opponents' meegaan. False if it passes. */
-    private fun partnerKnocksBack(): Boolean {
-        if (!botTerug(PARTNER)) return false
-        game.announceRedouble(PARTNER); refresh(); terugSeat = PARTNER
-        meegaanSeat?.let { react(it, "😱", "😳", tr("Yikes 😱", "Aiai 😱"), tr("Brave!", "Da durft wel!")) }
-        terugSummary = tr("${seatName(PARTNER)} knocked back", "${seatName(PARTNER)} klopte terug")
-        message = tr("$terugSummary — stakes are now ×${board?.multiplier}.", "$terugSummary — de inzet is nu ×${board?.multiplier}.")
-        return true
-    }
-
-    /** The declaring side is both bots (our side knocked against them):
-     *  dealer first, then partner, first yes takes the terug. */
-    private fun botsKnockBack() {
-        val redoubler = listOf(dealer, (dealer + 2) % 4).firstOrNull { botTerug(it) } ?: return
-        game.announceRedouble(redoubler); refresh(); terugSeat = redoubler; react(redoubler, "😤", "😈", tr("Knocked back! 😤", "Teruggeklopt! 😤"), tr("Bring it on!", "Kom maar op!"))
-        terugSummary = tr("${seatName(redoubler)} knocked back", "${seatName(redoubler)} klopte terug")
-        message = tr("$terugSummary — stakes are now ×${board?.multiplier}.", "$terugSummary — de inzet is nu ×${board?.multiplier}.")
-    }
-
-    private fun beginPlaying() {
-        callHints = null; callHintPick = false
-        game.startPlaying(); phase = TablePhase.PLAYING; refresh()
-        val turn = if (board?.currentPlayer == HUMAN) tr("Your turn.", "Jouw beurt.") else tr("${seatName(board?.currentPlayer ?: 0)} is thinking…", "${seatName(board?.currentPlayer ?: 0)} denkt na…")
-        // A bot's knock or knock-back is decided in the same step as the
-        // human's answer: keep it on screen with the stake it set, or a ×8
-        // deal looks like a miscount at the end.
-        val calls = listOfNotNull(meegaanSummary, terugSummary)
-        message = if (calls.isEmpty()) turn
-            else tr("${calls.joinToString(", ")} — stakes ×${board?.multiplier}. $turn", "${calls.joinToString(", ")} — inzet ×${board?.multiplier}. $turn")
-        persist()
-        scheduleBotIfNeeded()
-    }
-
-    private fun scheduleBotIfNeeded() {
-        val snapshot = board ?: return
-        if (phase != TablePhase.PLAYING || snapshot.finished || snapshot.currentPlayer == HUMAN) return
-        if (ruleBot != null) { startRuleBot(snapshot.currentPlayer); return }
-        schedule(BOT_THINK_MS) { if (phase == TablePhase.PLAYING && !trickPaused) playOneBot() }
-    }
-
-    /**
-     * The rule agent thinks on a worker thread with a copy of the game; the
-     * card is played on the main thread after at least BOT_THINK_MS, and only
-     * if nothing moved on meanwhile (turnToken: a new deal or the lobby
-     * cancels it). Any failure falls back to the QGRU's card.
-     */
-    private fun startRuleBot(player: Int) {
-        val model = ruleBot ?: return
-        val token = turnToken
-        val started = TimeSource.Monotonic.markNow()
-        val copy = game.copy()
-        val calls = RuleBot.Calls(dealer, meegaanSeat, terugSeat, declUs, declThem, trumpRuleKnown, setOf(HUMAN))
-        onWorker {
-            val decision = copy.legalCards().size > 1
-            val t0 = TimeSource.Monotonic.markNow()
-            val card = try { model.choose(copy, calls) } catch (error: Exception) { -1 } finally { copy.close() }
-            val ms = t0.elapsedNow().inWholeMilliseconds
-            onMain {
-                if (decision && card >= 0) recordBotMs(ms)
-                if (token != turnToken) return@onMain
-                val wait = (BOT_THINK_MS - started.elapsedNow().inWholeMilliseconds).coerceAtLeast(0L)
-                schedule(wait) {
-                    val now = board ?: return@schedule
-                    if (token != turnToken || phase != TablePhase.PLAYING || trickPaused
-                        || now.finished || now.currentPlayer != player) return@schedule
-                    val legal = game.legalCards()
-                    applyCardWithTiming(if (card in legal) card else qnetCard(player))
-                }
-            }
-        }
-    }
-
-    private fun qnetCard(player: Int): Int =
-        bot?.chooseCard(game.gruRaw(player), game.gruLength(player), game.gruGlobal(player),
-            game.actionFeatures(player), game.legalCards()) ?: game.legalCards().first()
-
-    private fun playOneBot() {
-        val snapshot = board ?: return
-        if (snapshot.finished || snapshot.currentPlayer == HUMAN || phase != TablePhase.PLAYING) return
-        applyCardWithTiming(qnetCard(snapshot.currentPlayer))
-    }
-
-    private fun applyCardWithTiming(card: Int) {
-        val before = board ?: return
-        // what the player could have played instead (the engine's answer), so
-        // the reactions can tell a forced loss from a gift
-        if (before.trickCards.none { it >= 0 }) trickLegal.clear()
-        trickLegal[before.currentPlayer] = game.legalCards().toSet()
-        val completesTrick = before.trickCards.count { it >= 0 } == 3
-        val completedCards = if (completesTrick) before.trickCards.filter { it >= 0 } + card else emptyList()
-        val completedPlayers = if (completesTrick) before.trickPlayers.filter { it >= 0 } + before.currentPlayer else emptyList()
-        // the trick's winner from its cards: on the last trick the engine
-        // finishes the deal without making the winner the player to move
-        val taker = if (completesTrick) completedPlayers[platform.trickWinner(completedCards, before.trumpSuit)] else -1
-        if (taker == HUMAN) tricksMine += 1
-        if (taker >= 0 && teamOf(taker) == HUMAN_TEAM) manillesUs += completedCards.count { it % 8 == 7 }
-        if (completesTrick && isScholTrick(completedCards)) cheers++
-        if (taker >= 0) {
-            reactToTrick(completedCards, completedPlayers, taker, before)
-            lastTrickCards = completedCards; lastTrickPlayers = completedPlayers; lastTrickWinner = taker
-        }
-        game.applyCard(card); refresh()
-        // the card is in: a restart resumes after it (a finished deal is
-        // scored on resume)
-        persist()
-        if (!completesTrick) { afterMove(); return }
-
-        heldTrickCards = completedCards
-        heldTrickPlayers = completedPlayers
-        trickPaused = true
-        legalCards = emptyList()
-        val winningPlayer = taker
-        message = if (winningPlayer == HUMAN) tr("You take the trick.", "Jij neemt de slag.") else tr("${seatName(winningPlayer)} takes the trick.", "${seatName(winningPlayer)} neemt de slag.")
-        // the cards rest, then (with animations) sweep to the winner
-        schedule(TRICK_HOLD_MS - COLLECT_MS) {
-            if (animations) trickCollectTo = winningPlayer
-            schedule(COLLECT_MS) {
-                heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
-                if (board?.finished == true) completeHand() else { refresh(); afterMove() }
-            }
-        }
-    }
-
-    private fun afterMove() {
-        if (board?.finished == true) { completeHand(); return }
-        message = if (board?.currentPlayer == HUMAN) tr("Your turn.", "Jouw beurt.") else tr("${seatName(board?.currentPlayer ?: 0)} is thinking…", "${seatName(board?.currentPlayer ?: 0)} denkt na…")
-        scheduleBotIfNeeded()
-    }
-
-    private fun completeHand() {
-        val usDelta = game.handScore(HUMAN_TEAM)
-        val themDelta = game.handScore(1)
-        usScore += usDelta; themScore += themDelta; refresh()
-        phase = if (matchMode && (usScore >= WINNING_SCORE || themScore >= WINNING_SCORE)) TablePhase.MATCH_OVER else TablePhase.HAND_OVER
-        val b = board!!
-        val mee = meegaanSeat; val ter = terugSeat
-        stats = statsStore.recordHand(HandRecord(
-            pointsUs = b.team0Points, pointsThem = b.team1Points, scoreUs = usDelta, scoreThem = themDelta,
-            tricksUs = b.team0Tricks, tricksMine = tricksMine, manillesUs = manillesUs,
-            weDeclared = teamOf(dealer) == HUMAN_TEAM, iDeclared = dealer == HUMAN, mull = b.trumpSuit < 0,
-            multiplier = b.multiplier,
-            meegaanUs = mee != null && teamOf(mee) == HUMAN_TEAM, meegaanThem = mee != null && teamOf(mee) != HUMAN_TEAM,
-            meegaanMine = mee == HUMAN,
-            terugUs = ter != null && teamOf(ter) == HUMAN_TEAM, terugThem = ter != null && teamOf(ter) != HUMAN_TEAM,
-            terugMine = ter == HUMAN,
-        ))
-        when {
-            !matchMode -> stats = statsStore.recordResult(false, b.team0Points, b.team1Points)
-            phase == TablePhase.MATCH_OVER -> stats = statsStore.recordResult(true, usScore, themScore)
-        }
-        val usWon = board!!.team0Points > board!!.team1Points
-        val themWon = board!!.team1Points > board!!.team0Points
-        val b0 = board!!
-        for (seat in 1..3) {
-            val mine = if (teamOf(seat) == HUMAN_TEAM) usWon else themWon
-            val theirs = if (teamOf(seat) == HUMAN_TEAM) themWon else usWon
-            val myPts = if (teamOf(seat) == HUMAN_TEAM) b0.team0Points else b0.team1Points
-            val myTricks = if (teamOf(seat) == HUMAN_TEAM) b0.team0Tricks else b0.team1Tricks
-            when {
-                phase == TablePhase.MATCH_OVER && mine -> react(seat, "🏆", tr("🏆 Champions!", "🏆 Kampioen!"), tr("We won! 🎉", "Gewonnen! 🎉"))
-                !usWon && !themWon -> react(seat, "🤝", tr("A draw! 🤝", "Gelijk! 🤝"))
-                mine && myTricks == 8 -> react(seat, "👑", tr("Every trick! 👑", "Alle slagen! 👑"))
-                mine && myPts >= 45 -> react(seat, "🥳", tr("Too strong for you 💪", "Te sterk voor jullie 💪"), tr("Next! 🥳", "Volgende! 🥳"))
-                mine -> react(seat, "🎉", "😄", "🙌", tr("We won! 🎉", "Gewonnen! 🎉"))
-                theirs && ((mee != null && teamOf(mee) == teamOf(seat)) || (ter != null && teamOf(ter) == teamOf(seat))) ->
-                    react(seat, "😡", "😤", tr("So much for knocking 😤", "Dat kloppen was niks 😤"), tr("Why did we knock?! 😡", "Waarom klopten we?! 😡"))
-                theirs && myPts <= 15 -> react(seat, "😠", "🤬", tr("That was terrible 😠", "Dat was slecht 😠"), tr("Embarrassing... 😤", "Beschamend... 😤"))
-                theirs && seat == PARTNER -> react(seat, "😠", "😤", "🤦", tr("Come on, partner! 😤", "Allez partner! 😤"), tr("Pay attention, partner 😠", "Let een beetje op, partner 😠"), tr("Better luck next time 😅", "Volgende keer beter 😅"))
-                theirs -> react(seat, "😞", "🤦", "😅", "😤", tr("Better luck next time 😅", "Volgende keer beter 😅"), tr("The cards were against us", "De kaarten zaten tegen"))
-            }
-        }
-        val winner = when {
-            board!!.team0Points > board!!.team1Points -> tr("You & ${seatName(2)} win this hand", "Jij & ${seatName(2)} winnen dit spel")
-            board!!.team1Points > board!!.team0Points -> tr("${seatName(1)} & ${seatName(3)} win this hand", "${seatName(1)} & ${seatName(3)} winnen dit spel")
-            else -> tr("This hand is a draw", "Dit spel is gelijk")
-        }
-        message = tr("$winner · hand ${board!!.team0Points}–${board!!.team1Points} · score +$usDelta / +$themDelta · match $usScore–$themScore", "$winner · spel ${board!!.team0Points}–${board!!.team1Points} · score +$usDelta / +$themDelta · stand $usScore–$themScore")
-        // a finished quick game or match has nothing left to resume
-        if (!matchMode || phase == TablePhase.MATCH_OVER) { saves.clear(); savedGame = null } else persist()
-    }
-
     private fun declarationIndex(): Int = board?.trumpSuit?.let { if (it < 0) 4 else it } ?: 4
 
-    private fun botMeegaan(seat: Int): Boolean {
-        val rel = (seat - dealer + 4) % 4
-        val (us, them) = if (teamOf(seat) == HUMAN_TEAM) usScore to themScore else themScore to usScore
-        return announceNet?.meegaan(game.handMask(seat), declarationIndex(), rel, us, them)
-            ?: botShouldCall(seat)
-    }
-
-    private fun botTerug(seat: Int): Boolean {
-        val rel = (seat - dealer + 4) % 4
-        val (us, them) = if (teamOf(seat) == HUMAN_TEAM) usScore to themScore else themScore to usScore
-        return announceNet?.terug(game.handMask(seat), declarationIndex(), rel, us, them)
-            ?: botShouldCall(seat)
-    }
-
-    // Offline fallback only, for when the announcement net fails to load: a
-    // crude hand-strength threshold with no notion of trump or the score.
-    private fun botShouldCall(player: Int): Boolean {
-        val ranks = intArrayOf(0, 0, 1, 3, 4, 5, 6, 8)
-        return (0 until 32).filter { game.handMask(player) and (1L shl it) != 0L }.sumOf { ranks[it % 8] } >= 29
-    }
-
-    private fun refresh() {
-        board = game.state(); handMask = game.handMask(HUMAN)
-        legalCards = if (phase == TablePhase.PLAYING && board?.currentPlayer == HUMAN) game.legalCards().toList() else emptyList()
-        handCounts = List(4) { game.handMask(it).countOneBits() }
-    }
-
-    private fun cancelBotTurn() { turnToken += 1; pending?.cancel(); pending = null }
     override fun close() {
-        cancelBotTurn(); scope.cancel()
-        // a move in flight still uses the nets: free them once it is done
+        session.close(); scope.cancel()
+        // a move or hint in flight still uses the nets: free them once it is done
         CoroutineScope(Dispatchers.Default).launch {
-            workerLock.withLock {
-                ruleBot?.close(); bot?.close(); declarationNet?.close(); announceNet?.close(); game.close()
+            worker.lock.withLock {
+                ruleBot?.close(); bot?.close(); declarationNet?.close(); announceNet?.close()
             }
         }
     }
     /** Match points the finished deal gave each team (us, them). */
-    fun handScores(): Pair<Int, Int> = game.handScore(HUMAN_TEAM) to game.handScore(1)
-    val meegaanName: String? get() = meegaanSeat?.let { seatName(it) }
-    val terugName: String? get() = terugSeat?.let { seatName(it) }
+    fun handScores(): Pair<Int, Int> = lastDeal
+    val meegaanName: String? get() = shown.meegaanSeat?.let { seatName(it) }
+    val terugName: String? get() = shown.terugSeat?.let { seatName(it) }
 
     fun seatName(player: Int) = if (player == HUMAN) tr("You", "Jij") else botNames[player - 1]
     fun trumpLabel(suit: Int) = if (suit < 0) tr("mull", "mull") else (if (Lang.dutch) arrayOf("ruiten", "harten", "klaveren", "schoppen") else arrayOf("diamonds", "hearts", "clubs", "spades"))[suit]
     fun trumpSymbol(suit: Int) = if (suit < 0) tr("∅ (mull)", "∅ (mull)") else arrayOf("♦", "♥", "♣", "♠")[suit]
-    fun playerHandMask(player: Int): Long = game.handMask(player)
+    fun playerHandMask(player: Int): Long = table.openHand(player) ?: 0L
 
     private companion object {
-        const val HUMAN = 0; const val PARTNER = 2; const val HUMAN_TEAM = 0; const val WINNING_SCORE = 101
-        const val BOT_THINK_MS = 900L
+        // the screen's side of a finished trick (the session waits as long: Pacing)
         const val TRICK_HOLD_MS = 1400L
         const val COLLECT_MS = 380L
         const val REACTION_MS = 2600L
         // hint softmax temperature, in final team points (gui/hints.py TAU_PTS)
         const val TAU_PTS = 1.0
-        fun teamOf(player: Int) = player % 2
     }
 }
 

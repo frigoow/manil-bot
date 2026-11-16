@@ -4,7 +4,9 @@ package com.manille.shared
  * What the shared game needs from the platform. The rules, the encoders and
  * the play-out live in C++ (cpp/mobile, the same code on every platform);
  * the nets run on the platform's ONNX Runtime; files sit in the app's
- * private storage. Android: app/AndroidPlatform.kt. iOS: to come.
+ * private storage. Android and the desktop: com.manille.jvm.JvmPlatform
+ * (shared/src/jvmShared), set up by app/AndroidPlatform.kt and
+ * desktop/Main.kt. iOS: to come.
  */
 interface Platform {
     /** A fresh engine; start it with [Engine.newDeal]. */

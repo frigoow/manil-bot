@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Manille"
-include(":shared", ":app")
+include(":shared", ":app", ":desktop")

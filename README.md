@@ -15,6 +15,13 @@ To install: open the downloaded file on your phone and allow your browser or
 file manager to install unknown apps when Android asks. New versions install
 over the old one and keep your profiles, statistics and saved game.
 
+### On a computer: [Windows](https://github.com/frigoow/manil-bot/releases/latest/download/Manille-Windows.msi) · [macOS](https://github.com/frigoow/manil-bot/releases/latest/download/Manille-macOS.dmg) · [Linux (.deb)](https://github.com/frigoow/manil-bot/releases/latest/download/Manille-Linux.deb)
+
+The same game, bots and settings. macOS needs an Apple Silicon Mac (M1 or
+later). The packages are not signed: Windows may show a SmartScreen warning
+(*More info* > *Run anyway*), and on macOS open the app the first time with
+right-click > *Open*.
+
 ---
 
 ## What's in it
@@ -164,7 +171,10 @@ manille.cafeThemeName=Our café
 
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it fetches the
 networks, builds and signs the APK, and publishes it as release `vX.Y.Z`,
-which `releases/latest/download/Manille.apk` then points at. To release:
+which `releases/latest/download/Manille.apk` then points at. It then builds
+the desktop packages on Windows, macOS and Linux runners
+(`.github/workflows/desktop.yml`) and attaches them to the same release. To
+release:
 
 1. bump `versionCode` (+1) and `versionName` in `android/app/build.gradle.kts`,
 2. commit, then `git tag vX.Y.Z && git push origin main vX.Y.Z`.
