@@ -30,8 +30,8 @@ data class ServerConfig(
     val botNames: List<String> = AppConfig.botNames,
 )
 
-/** Someone who said hello: known by [token] across connections. */
-class Player(val token: String, var name: String) {
+/** Someone who said hello: a stored player ([id], public), on this device by [token]. */
+class Player(val id: String, var token: String, var name: String) {
     var connection: Connection? = null
     var table: ServerTable? = null
 }
@@ -45,14 +45,20 @@ class Connection(private val socket: WebSocketSession) {
     private val outbox = Channel<ServerMessage>(OUTBOX)
     private val sender = socket.launch {
         for (message in outbox) socket.send(Frame.Text(ProtocolJson.encodeToString(ServerMessage.serializer(), message)))
+        // closed on purpose: what was queued (a refusal, say) has gone out first
+        runCatching { socket.close() }
     }
 
     fun send(message: ServerMessage) {
-        if (outbox.trySend(message).isFailure) close()
+        if (outbox.trySend(message).isFailure) drop()
     }
 
-    fun close() {
-        outbox.close()
+    /** Closes once the messages already queued are sent. */
+    fun close() { outbox.close() }
+
+    /** Closes now, unsent messages and all (a client that cannot keep up). */
+    private fun drop() {
+        outbox.cancel()
         socket.launch { runCatching { socket.close() } }
     }
 
@@ -69,15 +75,24 @@ class Hub(
     private val bots: Bots,
     private val worker: Worker,
     val config: ServerConfig = ServerConfig(),
+    /** Players, statistics and games (an in-memory database unless one is given). */
+    val store: Store = Store(":memory:"),
 ) : AutoCloseable {
     val game: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)
     val scope = CoroutineScope(SupervisorJob() + game)
     private val secure = SecureRandom()
     val random: Random = secure.asKotlinRandom()
+    /** Connected or seated players, by id. */
     private val players = mutableMapOf<String, Player>()
     private val tables = mutableMapOf<String, ServerTable>()
+    val startedAt: Long = System.currentTimeMillis()
 
     val tableCount: Int get() = tables.size
+    /** The tables now (on the game thread). */
+    val liveTables: List<ServerTable> get() = tables.values.sortedBy { it.code }
+    fun table(code: String): ServerTable? = tables[code.trim().uppercase()]
+    val connectedCount: Int get() = players.values.count { it.connection != null }
+    val onlinePlayers: List<Player> get() = players.values.filter { it.connection != null }.sortedBy { it.name }
 
     /** Serves one WebSocket until it closes. */
     suspend fun serve(socket: WebSocketSession) {
@@ -86,6 +101,13 @@ class Hub(
             for (frame in socket.incoming) {
                 if (frame !is Frame.Text) continue
                 val message = runCatching { ProtocolJson.decodeFromString(ClientMessage.serializer(), frame.readText()) }.getOrNull()
+                if (message is ClientMessage.Hello) {
+                    // who this is comes from the database, before the game thread sees them
+                    val account = if (message.protocol != PROTOCOL_VERSION) null
+                        else store.read { signIn(message.token, cleanName(message.name), message.transfer) }
+                    withContext(game) { hello(connection, message, account) }
+                    continue
+                }
                 withContext(game) {
                     if (message == null) connection.send(ServerMessage.Problem(Problems.BAD_MESSAGE, "Unreadable message."))
                     else handle(connection, message)
@@ -97,7 +119,6 @@ class Hub(
     }
 
     private fun handle(connection: Connection, message: ClientMessage) {
-        if (message is ClientMessage.Hello) { hello(connection, message); return }
         val player = connection.player ?: run {
             connection.send(ServerMessage.Problem(Problems.HELLO_FIRST, "Say hello first.")); return
         }
@@ -106,7 +127,7 @@ class Hub(
             is ClientMessage.Create -> {
                 table?.leave(player)
                 val code = newCode()
-                ServerTable(code, message.match, this, platform, bots, worker).also { tables[code] = it }.join(player)
+                ServerTable(code, message.match, this, platform, bots, worker, store).also { tables[code] = it }.join(player)
             }
             is ClientMessage.Join -> {
                 val target = tables[message.code.trim().uppercase()]
@@ -117,24 +138,38 @@ class Hub(
                     else -> { table?.leave(player); target.join(player) }
                 }
             }
+            ClientMessage.GetStats -> scope.launch {
+                val s = store.read { stats(player.id) }
+                connection.send(ServerMessage.PlayerStats(s.c, s.history))
+            }
+            ClientMessage.GetTransferCode -> scope.launch {
+                val code = store.read { transferCode(player.id, TRANSFER_MINUTES) }
+                connection.send(ServerMessage.TransferCode(code, TRANSFER_MINUTES))
+            }
             else -> table?.handle(player, message)
                 ?: connection.send(ServerMessage.Problem(Problems.NO_TABLE, "You are not at a table."))
         }
     }
 
-    private fun hello(connection: Connection, hello: ClientMessage.Hello) {
+    private fun hello(connection: Connection, hello: ClientMessage.Hello, account: Store.Account?) {
         if (hello.protocol != PROTOCOL_VERSION) {
             connection.send(ServerMessage.Problem(Problems.VERSION, "This app is too old or too new for the server: please update."))
             connection.close(); return
         }
-        val name = cleanName(hello.name)
-        val player = hello.token?.let { players[it] } ?: Player(newToken(), name).also { players[it.token] = it }
-        player.name = name
-        // a newer connection replaces the old one (the app reconnected)
+        if (account == null) {
+            connection.send(ServerMessage.Problem(Problems.BAD_TRANSFER, "That code is unknown or has expired."))
+            connection.close(); return
+        }
+        // a connection that already said hello as someone else lets go of them first
+        connection.player?.takeIf { it.id != account.id }?.let { disconnected(connection) }
+        val player = players[account.id] ?: Player(account.id, account.token, account.name).also { players[it.id] = it }
+        player.name = account.name
+        player.token = account.token
+        // a newer connection replaces the old one (the app reconnected, or the same player on another device)
         player.connection?.takeIf { it !== connection }?.let { old -> old.player = null; old.close() }
         player.connection = connection
         connection.player = player
-        connection.send(ServerMessage.Welcome(player.token, player.name))
+        connection.send(ServerMessage.Welcome(account.token, player.name, player.id))
         player.table?.reconnected(player)
     }
 
@@ -143,8 +178,9 @@ class Hub(
         connection.player = null
         if (player.connection !== connection) return
         player.connection = null
+        store.post { touch(player.id) }
         val table = player.table
-        if (table == null) players.remove(player.token) else table.disconnected(player)
+        if (table == null) players.remove(player.id) else table.disconnected(player)
     }
 
     internal fun closed(table: ServerTable) {
@@ -160,7 +196,11 @@ class Hub(
         }
     }
 
-    private fun newToken(): String = ByteArray(24).also(secure::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
+    /** A new game's id: public, unguessable enough that a game's page is not found by counting. */
+    fun newGameId(): String = ByteArray(9).also(secure::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
+
+    /** Closes a table (admin): its players are told, its game ends as abandoned. */
+    fun closeTable(code: String): Boolean = tables[code.trim().uppercase()]?.let { it.close("closed"); true } ?: false
 
     override fun close() {
         scope.cancel()
@@ -172,6 +212,7 @@ class Hub(
         private const val CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         const val MAX_NAME = 20
         const val MAX_REACTION = 40
+        const val TRANSFER_MINUTES = 10
 
         fun cleanName(raw: String): String =
             raw.filter { !it.isISOControl() }.trim().take(MAX_NAME).ifEmpty { "Player" }

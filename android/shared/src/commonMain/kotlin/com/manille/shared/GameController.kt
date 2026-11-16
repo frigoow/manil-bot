@@ -104,16 +104,23 @@ class GameController(private val platform: Platform) : AutoCloseable {
     /** Opens the online screens (not yet connected). */
     fun openOnline() { if (online == null) online = OnlineState(null) }
 
-    /** Connects to [url] as this profile; the server's token for it is kept for next time. */
-    fun connect(url: String, name: String) {
+    /**
+     * Connects to [url] as this profile; the server's token for it is kept for
+     * next time. With a [transfer] code from another device, this profile
+     * plays as that device's player from now on (its statistics too).
+     */
+    fun connect(url: String, name: String, transfer: String? = null) {
         disconnect()
         val address = url.trim()
         onlineName = name.trim()
         onlineStore.setServer(address, onlineName); serverUrl = address
         val key = "${profileStore.activeId}@$address"
-        val r = RemoteSession(address, onlineName, onlineStore.token(key))
+        val code = transfer?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+        val r = RemoteSession(address, onlineName, if (code != null) null else onlineStore.token(key), transfer = code)
         r.listener = ::onEvent
-        r.onToken = { onlineStore.setToken(key, it) }
+        r.onToken = { token -> onlineStore.setToken(key, token); online = online?.copy(playerId = r.playerId) }
+        r.onStats = { stats -> online = online?.copy(stats = stats) }
+        r.onTransferCode = { c, minutes -> online = online?.copy(transferCode = c, transferMinutes = minutes) }
         r.onStatus = { status ->
             online = online?.copy(status = status)
             if (status != RemoteSession.Status.ONLINE && phase != TablePhase.LOBBY)
@@ -133,7 +140,13 @@ class GameController(private val platform: Platform) : AutoCloseable {
             reactions = reactions + (seat to text)
             later(REACTION_MS) { if (reactions[seat] == text) reactions = reactions - seat }
         }
-        r.onProblem = { _, text -> online = online?.copy(problem = text) }
+        r.onProblem = { problemCode, text ->
+            if (problemCode == Problems.BAD_TRANSFER) {
+                // a wrong or expired code: back to the form, nothing changed on this device
+                disconnect()
+                online = online?.copy(problem = tr("That transfer code is unknown or has expired.", "Die overzetcode is onbekend of verlopen."))
+            } else online = online?.copy(problem = text)
+        }
         r.onLeft = { leftTable() }
         remote = r
         online = OnlineState(r.status)
@@ -154,6 +167,13 @@ class GameController(private val platform: Platform) : AutoCloseable {
     fun joinTable(code: String) { remote?.join(code) }
     fun sit(seat: Int) { remote?.sit(seat) }
     fun startOnline() { remote?.startGame() }
+
+    /** Opens this player's online statistics (the server sends them fresh). */
+    fun showOnlineStats() { remote?.requestStats(); online = online?.copy(showStats = true) }
+    fun hideOnlineStats() { online = online?.copy(showStats = false) }
+
+    /** Asks the server for a code to play as this player on another device. */
+    fun requestTransferCode() { remote?.requestTransferCode() }
 
     private fun leftTable() {
         resetScreen()

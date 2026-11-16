@@ -174,7 +174,7 @@ private fun ManilleApp(controller: GameController) {
         when {
             controller.phase != TablePhase.LOBBY -> GameScene(controller)
             controller.isOnline -> OnlineScreen(controller)
-            screen == "stats" -> StatsScreen(controller) { screen = "lobby" }
+            screen == "stats" -> StatsScreen(controller.stats, controller.profileName) { screen = "lobby" }
             else -> Lobby(controller) { screen = "stats" }
         }
     }
@@ -452,14 +452,13 @@ private fun ModeButton(title: String, sub: String, modifier: Modifier, onClick: 
 // ----------------------------------------------------------- statistics ----
 
 @Composable
-private fun StatsScreen(controller: GameController, back: () -> Unit) {
-    val s = controller.stats
+internal fun StatsScreen(s: Stats, title: String, back: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(tr("‹ Back", "‹ Terug"), color = GoldBright, fontSize = 15.sp, modifier = Modifier.clickable(onClick = back).padding(8.dp))
             Spacer(Modifier.weight(1f))
-            Text(controller.profileName.uppercase(), color = GoldBright, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
+            Text(title.uppercase(), color = GoldBright, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
         }
         if (s["hands"] == 0) {
             Spacer(Modifier.height(40.dp)); Text(tr("No hands played yet.", "Nog geen spellen gespeeld."), color = Ink); return@Column

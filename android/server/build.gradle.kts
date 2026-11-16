@@ -13,7 +13,9 @@ plugins {
 //
 // Settings come from the environment: PORT, MANILLE_RESOURCES (a folder with
 // native/ and models/), MANILLE_GRACE_SECONDS (how long a dropped player's
-// chair waits before a bot plays it).
+// chair waits before a bot plays it), MANILLE_DB (the SQLite file; default
+// manille.db in the working directory), MANILLE_ADMIN_TOKEN (turns on the
+// admin API; see Api.kt).
 
 val ktor = "3.6.1"
 
@@ -25,6 +27,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.slf4j:slf4j-simple:2.0.17")
+    // players, statistics and games: one SQLite file (natives for Linux, Windows, macOS, x64 and arm64)
+    implementation("org.xerial:sqlite-jdbc:3.49.1.0")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-client-cio:$ktor")
 }

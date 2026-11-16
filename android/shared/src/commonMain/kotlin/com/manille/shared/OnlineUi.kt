@@ -50,6 +50,11 @@ private val Warn = Color(0xFFE07A6E)
 internal fun OnlineScreen(controller: GameController) {
     val theme = LocalAppTheme.current
     val state = controller.online ?: return
+    if (state.showStats) {
+        // the app's own statistics screen, with the numbers the server counted
+        StatsScreen(state.stats ?: Stats(emptyMap(), emptyList()), "${controller.onlineName} · online") { controller.hideOnlineStats() }
+        return
+    }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 30.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
@@ -112,9 +117,41 @@ private fun ServerForm(controller: GameController) = OnlinePanel {
     Spacer(Modifier.height(8.dp))
     OutlinedTextField(url, { url = it.trim() }, singleLine = true, colors = fieldColors(), modifier = Modifier.fillMaxWidth(),
         label = { Text(tr("Server address", "Serveradres")) }, placeholder = { Text("ws://192.168.1.20:8080/play", color = theme.inkDim) })
+    // playing as the same player as on another device: that device shows the code
+    var transfer by remember { mutableStateOf("") }
+    var withCode by remember { mutableStateOf(false) }
+    if (withCode) {
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(transfer, { transfer = it.uppercase().filter { c -> c.isLetterOrDigit() }.take(8) }, singleLine = true,
+            colors = fieldColors(), modifier = Modifier.fillMaxWidth(),
+            label = { Text(tr("Code from your other device", "Code van je andere toestel")) },
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters))
+    }
     Spacer(Modifier.height(10.dp))
     val valid = url.startsWith("ws://") || url.startsWith("wss://")
-    GoldButton(tr("Connect", "Verbinden"), Modifier.fillMaxWidth(), enabled = valid && name.isNotBlank()) { controller.connect(url, name) }
+    GoldButton(tr("Connect", "Verbinden"), Modifier.fillMaxWidth(), enabled = valid && name.isNotBlank() && (!withCode || transfer.length == 8)) {
+        controller.connect(url, name, transfer.takeIf { withCode })
+    }
+    if (!withCode) TextButton(onClick = { withCode = true }) {
+        Text(tr("Already playing on another device?", "Speel je al op een ander toestel?"), color = theme.inkDim, fontSize = 13.sp)
+    }
+}
+
+/** Your online statistics, and a code to play as yourself on another device. */
+@Composable
+private fun ProfileLinks(controller: GameController, state: OnlineState) {
+    val theme = LocalAppTheme.current
+    Spacer(Modifier.height(14.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = controller::showOnlineStats) { Text(tr("My online statistics", "Mijn online statistieken"), color = theme.accentBright, fontSize = 13.sp) }
+        TextButton(onClick = controller::requestTransferCode) { Text(tr("Play on another device", "Op ander toestel spelen"), color = theme.accentBright, fontSize = 13.sp) }
+    }
+    state.transferCode?.let { code ->
+        Text(code.chunked(4).joinToString(" "), color = theme.accentBright, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 4.sp)
+        Text(tr("On the other device: Online › \"Already playing on another device?\" and enter this code (valid ${state.transferMinutes} minutes).",
+            "Op het andere toestel: Online › \"Speel je al op een ander toestel?\" en vul deze code in (${state.transferMinutes} minuten geldig)."),
+            color = theme.inkDim, fontSize = 12.sp, textAlign = TextAlign.Center)
+    }
 }
 
 @Composable
@@ -141,6 +178,7 @@ private fun TablePicker(controller: GameController, status: RemoteSession.Status
                 Spacer(Modifier.width(10.dp))
                 GoldButton(tr("Join", "Meedoen"), enabled = code.length == 5) { controller.joinTable(code) }
             }
+            controller.online?.let { ProfileLinks(controller, it) }
         }
     }
 }
