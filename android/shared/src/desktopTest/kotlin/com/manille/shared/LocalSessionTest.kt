@@ -177,6 +177,31 @@ class LocalSessionTest {
         assertEquals(32, table.events.count { it.first is TableEvent.CardPlayed })
     }
 
+    /** The mull nets load on demand, can be released and come back (RuleBot). */
+    @Test fun theRuleAgentLoadsTheMullNetsWhenNeeded() {
+        val q = platform.qModel(ModelNames.Q_TRUMP).also { closeables += it }
+        val announce = platform.announceModel().also { closeables += it }
+        val bot = RuleBot(platform, q, announce).also { closeables += it }
+        fun deal(trump: Int, seed: Long) {
+            val g = platform.newEngine()
+            try {
+                g.newDeal(0, seed, trump); g.startPlaying()
+                val calls = RuleBot.Calls(0, null, null, 0, 0, false, emptySet())
+                while (!g.state().finished) {
+                    val card = bot.choose(g, calls)
+                    assertTrue(card in g.legalCards(), "illegal card $card")
+                    g.applyCard(card)
+                }
+                assertEquals(60, g.state().team0Points + g.state().team1Points)
+            } finally { g.close() }
+        }
+        deal(trump = -1, seed = 1)   // loads them
+        bot.releaseMull()
+        deal(trump = 2, seed = 2)    // a suit deal without them
+        bot.prepareMull()
+        deal(trump = -1, seed = 3)   // back again
+    }
+
     @Test fun aSavedGameCarriesOn() {
         // play the first trick of a match, keep the save, leave the table
         val first = play(fastBots(), seed = 77, setup = { it.start(match = true) }) { event, _ ->

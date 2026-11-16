@@ -429,9 +429,13 @@ class GameController(private val platform: Platform) : AutoCloseable {
                 tricksMine = 0; manillesUs = 0
                 declarationSummary = ""; meegaanSummary = null; terugSummary = null
             }
-            is TableEvent.Declared -> declarationSummary =
-                if (event.seat == HUMAN) tr("You declared ${trumpSymbol(event.trump)}", "Jij koos ${trumpSymbol(event.trump)}")
-                else tr("${seatName(event.seat)} declared ${trumpSymbol(event.trump)}", "${seatName(event.seat)} koos ${trumpSymbol(event.trump)}")
+            is TableEvent.Declared -> {
+                // the mull nets only while a mull deal needs them (RuleBot)
+                ruleBot?.let { bot -> onWorker { if (event.trump < 0) bot.prepareMull() else bot.releaseMull() } }
+                declarationSummary =
+                    if (event.seat == HUMAN) tr("You declared ${trumpSymbol(event.trump)}", "Jij koos ${trumpSymbol(event.trump)}")
+                    else tr("${seatName(event.seat)} declared ${trumpSymbol(event.trump)}", "${seatName(event.seat)} koos ${trumpSymbol(event.trump)}")
+            }
             is TableEvent.Knocked -> meegaanSummary =
                 if (event.seat == HUMAN) tr("You knocked", "Jij klopte")
                 else tr("${seatName(event.seat)} knocked", "${seatName(event.seat)} klopte")

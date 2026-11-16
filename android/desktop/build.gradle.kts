@@ -127,6 +127,15 @@ compose.desktop {
             "-Dmanille.botNames=$botNames", "-Dmanille.cafeThemeName=$cafeThemeName",
             // System.load of the engine and Skia's own libraries (Java 24+ warns without it)
             "--enable-native-access=ALL-UNNAMED",
+            // Memory: the game's own heap is small (~20 MB live). The serial
+            // collector has the smallest footprint and gives free heap back
+            // to the system; without a cap the JVM starts at 1/64 of the RAM
+            // and may grow to a quarter of it.
+            "-XX:+UseSerialGC", "-Xms32m", "-Xmx512m",
+            "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=30",
+            // Skia's GPU cache (Direct3D on Windows, OpenGL/Metal elsewhere):
+            // 256 MB by default, far more than a card table needs
+            "-Dskiko.gpu.resourceCacheLimit=64M",
         )
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
