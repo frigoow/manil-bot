@@ -20,7 +20,7 @@ class BeliefNet(context: Context, private val modelFile: String) : BeliefModel {
 
     init {
         val model = installModel(context)
-        session = environment.createSession(model.absolutePath, OrtSession.SessionOptions())
+        session = OrtSessions.open(environment, model)
     }
 
     override fun probabilities(observation: FloatArray): FloatArray {

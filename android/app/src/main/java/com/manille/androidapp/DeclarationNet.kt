@@ -3,7 +3,6 @@ package com.manille.androidapp
 import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
 import java.io.File
 import java.nio.FloatBuffer
@@ -12,8 +11,7 @@ import java.nio.LongBuffer
 /** Exact mobile export of the desktop score-aware declaration policy. */
 class DeclarationNet(context: Context) : DeclarationModel {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session = environment.createSession(
-        installModel(context).absolutePath, OrtSession.SessionOptions())
+    private val session = OrtSessions.open(environment, installModel(context))
 
     override fun equities(handMask: Long, us: Int, them: Int): FloatArray {
         val hand = FloatArray(32) { if (handMask and (1L shl it) != 0L) 1f else 0f }

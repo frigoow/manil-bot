@@ -16,7 +16,7 @@ class QNet(context: Context, private val modelFile: String) : QModel {
 
     init {
         val model = installModel(context)
-        session = environment.createSession(model.absolutePath, OrtSession.SessionOptions())
+        session = OrtSessions.open(environment, model)
     }
 
     /** Raw Q values for the on-device hint overlay; the same model picks bots. */

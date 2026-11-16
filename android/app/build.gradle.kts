@@ -26,8 +26,8 @@ android {
         applicationId = "com.manille.androidapp"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "1.0.5"
+        versionCode = 8
+        versionName = "1.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BOT_NAMES", "\"$botNames\"")
@@ -82,5 +82,8 @@ dependencies {
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
+    // 1.27.0: first tested release that honours mlas.disable_kleidiai for Gemm and
+    // GRU (see OrtSessions.kt). 1.28.0 - 1.32.0 crashed at startup under the
+    // emulator's arm64 translation, so test on a device before moving past it.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
 }

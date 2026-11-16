@@ -3,7 +3,6 @@ package com.manille.androidapp
 import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
 import java.io.File
 import java.nio.FloatBuffer
@@ -17,8 +16,7 @@ import java.nio.LongBuffer
  */
 class AnnounceNet(context: Context) : AnnounceModel {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session = environment.createSession(
-        installModel(context).absolutePath, OrtSession.SessionOptions())
+    private val session = OrtSessions.open(environment, installModel(context))
 
     /** `[meegaan_pass, meegaan_call, terug_pass, terug_call]` match equities. */
     override fun equities(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): FloatArray {
