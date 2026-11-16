@@ -2,7 +2,8 @@ name: CI
 
 # The C++ the app runs, built and tested on the desktop (no phone, no models
 # needed): the C interface end to end, the trump rule and the world sampler.
-# Then the game sessions, played through on the desktop JVM (job sessions).
+# Then the game sessions, played through on the desktop JVM, and online
+# tables on a local server with real clients (job sessions).
 on:
   push:
     branches: [main]
@@ -42,4 +43,4 @@ jobs:
         run: MODELS_TAG=models-v1 scripts/fetch_models.sh
       - name: Test
         working-directory: android
-        run: ./gradlew --no-daemon -Pmanille.skipAndroidApp=true :shared:desktopTest :desktop:compileKotlin
+        run: ./gradlew --no-daemon -Pmanille.skipAndroidApp=true :shared:desktopTest :server:test :desktop:compileKotlin

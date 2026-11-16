@@ -15,7 +15,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Manille"
-include(":shared", ":desktop")
+include(":shared", ":desktop", ":server")
 // The Android app needs the NDK just to be configured; desktop-only builds
 // (CI's tests, the desktop packages) leave it out: -Pmanille.skipAndroidApp=true
 if (providers.gradleProperty("manille.skipAndroidApp").orNull != "true") include(":app")
