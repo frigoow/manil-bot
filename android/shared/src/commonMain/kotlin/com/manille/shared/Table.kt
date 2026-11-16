@@ -1,7 +1,10 @@
 package com.manille.shared
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
+@Serializable
 enum class TablePhase { LOBBY, DECLARATION, MEEGAAN, TERUG, PLAYING, HAND_OVER, MATCH_OVER }
 
 /*
@@ -9,8 +12,8 @@ enum class TablePhase { LOBBY, DECLARATION, MEEGAAN, TERUG, PLAYING, HAND_OVER, 
  *
  * Seats are numbered from the viewer's point of view: 0 is the local player,
  * 1 on their left (West), 2 the partner (North), 3 East; teams are seat % 2,
- * so "us" is team 0. A local game is played from seat 0; a networked one
- * will rotate the server's seats so the viewer is always 0.
+ * so "us" is team 0. A local game is played from seat 0; an online one
+ * rotates the server's seats so the viewer is always 0 ([Seats]).
  *
  * The session is the referee (it deals, checks every move, runs the bots
  * and keeps the score); GameController turns what the session reports into
@@ -24,6 +27,7 @@ internal const val WINNING_SCORE = 101
 internal fun teamOf(seat: Int) = seat % 2
 
 /** Everything the viewer may know of the table -- never another player's cards. */
+@Serializable
 data class TableView(
     val phase: TablePhase,
     val board: BoardState?,
@@ -41,6 +45,10 @@ data class TableView(
     /** Who knocked (meegaan) and who knocked back (terug) this deal. */
     val meegaanSeat: Int?,
     val terugSeat: Int?,
+    /** Whose call the table waits for (declaration, meegaan or terug), when it is a player's. */
+    val asked: Int? = null,
+    /** The call [asked] must answer: DECLARATION, MEEGAAN or TERUG. */
+    val askedCall: TablePhase? = null,
 ) {
     companion object {
         val LOBBY = TableView(TablePhase.LOBBY, null, 0L, emptyList(), List(4) { 0 }, 0, 0, true, 0, 0, null, null)
@@ -48,29 +56,45 @@ data class TableView(
 }
 
 /** A trick the last card completed. [before] is the board as that card was played. */
+@Serializable
 data class CompletedTrick(val cards: List<Int>, val players: List<Int>, val taker: Int, val before: BoardState)
 
 /** What happened at the table, in order; each comes with the [TableView] right after it. */
+@Serializable
 sealed interface TableEvent {
     /** New cards are dealt; [TableView.dealer] declares next. */
+    @Serializable @SerialName("deal")
     data object DealStarted : TableEvent
     /** Trump suit 0..3, or -1 for mull (no trump). */
+    @Serializable @SerialName("declared")
     data class Declared(val seat: Int, val trump: Int) : TableEvent
     /** Meegaan: the defenders double. */
+    @Serializable @SerialName("knocked")
     data class Knocked(val seat: Int) : TableEvent
     /** Terug: the declarers double again. */
+    @Serializable @SerialName("knocked-back")
     data class KnockedBack(val seat: Int) : TableEvent
     /** The viewer must answer: [TableView.phase] says what (declare, knock, knock back). */
+    @Serializable @SerialName("your-call")
     data object YourCall : TableEvent
+    /** Another player must answer [call] (DECLARATION, MEEGAAN or TERUG); the table waits for them. */
+    @Serializable @SerialName("waiting")
+    data class Waiting(val seat: Int, val call: TablePhase) : TableEvent
+    /** The table was sent afresh (an online table after reconnecting): show [TableView] as it is. */
+    @Serializable @SerialName("resynced")
+    data object Resynced : TableEvent
     /** The calls are done; the player left of the dealer leads. */
+    @Serializable @SerialName("play")
     data object PlayStarted : TableEvent
     /**
      * [seat] played [card]. [legal]: what that seat could have played instead
      * (a local game knows; over the network it would give away a hand, so
      * null). [trick]: set when this card completed a trick.
      */
+    @Serializable @SerialName("card")
     data class CardPlayed(val seat: Int, val card: Int, val legal: Set<Int>?, val trick: CompletedTrick?) : TableEvent
     /** The deal is over: match points for each team ([TableView] has the new score). */
+    @Serializable @SerialName("scored")
     data class DealScored(val usDelta: Int, val themDelta: Int) : TableEvent
 }
 

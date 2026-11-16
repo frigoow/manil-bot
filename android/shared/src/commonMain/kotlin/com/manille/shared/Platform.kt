@@ -51,6 +51,7 @@ interface Storage {
     fun rename(from: String, to: String): Boolean
 }
 
+@kotlinx.serialization.Serializable
 data class BoardState(
     val currentPlayer: Int,
     val trumpSuit: Int,

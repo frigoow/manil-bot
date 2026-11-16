@@ -2,6 +2,7 @@ plugins {
     id("org.jetbrains.kotlin.multiplatform")
     id("com.android.kotlin.multiplatform.library")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 // Everything that is not platform plumbing: the game session, the bots'
@@ -13,6 +14,8 @@ plugins {
 // Android and the desktop are both JVMs: they share src/jvmShared (JNI to the
 // C++ engine, the nets on ONNX Runtime, file storage), compiled into each
 // target against that target's ONNX Runtime build.
+val ktor = "3.6.1"
+
 kotlin {
     androidLibrary {
         namespace = "com.manille.shared"
@@ -32,11 +35,17 @@ kotlin {
             api("org.jetbrains.compose.material3:material3:1.12.0-alpha03")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+            // online tables (RemoteSession): WebSockets, each platform with its own engine
+            implementation("io.ktor:ktor-client-core:$ktor")
+        }
+        iosMain.dependencies {
+            implementation("io.ktor:ktor-client-darwin:$ktor")
         }
         androidMain {
             kotlin.srcDir("src/jvmShared/kotlin")
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+                implementation("io.ktor:ktor-client-okhttp:$ktor")
                 // 1.27.0: first tested release that honours mlas.disable_kleidiai for Gemm and
                 // GRU (see OrtSessions.kt). 1.28.0 - 1.32.0 crashed at startup under the
                 // emulator's arm64 translation, so test on a device before moving past it.
@@ -47,6 +56,7 @@ kotlin {
             kotlin.srcDir("src/jvmShared/kotlin")
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
+                implementation("io.ktor:ktor-client-cio:$ktor")
                 // the desktop build: native runtimes for Windows, macOS and Linux in one jar
                 implementation("com.microsoft.onnxruntime:onnxruntime:1.27.0")
             }

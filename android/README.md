@@ -4,7 +4,8 @@ Kotlin and Compose Multiplatform render the game; a JNI adapter
 (`cpp/jni/jni_bridge.cpp`) calls the C++ engine and the rule agent through
 the plain C interface in `cpp/mobile/manille_mobile.h`; ONNX Runtime runs
 the networks. The same game and screens run on Android (`app/`) and on
-Windows, macOS (Apple Silicon) and Linux (`desktop/`). No server.
+Windows, macOS (Apple Silicon) and Linux (`desktop/`). Offline play needs no
+server; online tables with friends run on `server/` (see below).
 
 ## Build
 
@@ -53,7 +54,8 @@ in git.
 | Bot card play | `cpp/rule_agent.cpp` + `cpp/rule_playout.cpp` (+ `cpp/fast_policy.cpp`), called by `shared/.../RuleBot.kt` |
 | World sampling | `cpp/sampler/` via `manille_mobile_sample_worlds` |
 | Belief / Q / decision networks | ONNX Runtime: `app/.../BeliefNet.kt`, `QNet.kt`, `DeclarationNet.kt`, `AnnounceNet.kt` |
-| The table: deals, calls, bots' turns, score | `shared/.../LocalSession.kt` behind `TableSession` (`Table.kt`) |
+| The table: deals, calls, bots' turns, score | `shared/.../Referee.kt` (any seats played by people), offline through `LocalSession.kt`, online through `RemoteSession.kt`, both behind `TableSession` (`Table.kt`) |
+| Online tables | `server/` (Ktor) runs a `Referee` per table; messages in `shared/.../Protocol.kt` |
 | Table on screen, hints, stats, profiles | `shared/.../ManilleUi.kt`, `GameController.kt`, `Persistence.kt` |
 | JNI, the nets on ONNX Runtime, files (Android + desktop) | `shared/src/jvmShared/` (`com.manille.jvm`) |
 
@@ -88,3 +90,31 @@ The local player is seat 0. A move is sampled, weighed and played out on a
 worker thread from a copy of the game, so the UI never blocks on the bot.
 If a model file is missing the app says which and how to export it, rather
 than silently playing a weaker bot.
+
+## Online tables
+
+The server runs every online table: it deals, checks each move, plays the
+free chairs with the same bots as the app, and sends each player only their
+own cards (the table is turned to their seat, as in `Seats`). Players meet
+at a table by a 5-letter code; a player whose connection drops gets their
+chair back on reconnecting, and a bot plays it after a grace time
+(`MANILLE_GRACE_SECONDS`, 20 s by default) until they return.
+
+```bash
+./gradlew -Pmanille.skipAndroidApp=true :server:run    # ws://localhost:8080/play
+```
+
+In the app: *Online*, a name, the server's address (`ws://<host>:8080/play`;
+`wss://` behind a TLS proxy). On the Android emulator the host machine is
+`10.0.2.2`.
+
+For a server elsewhere, `./gradlew :server:installDist` gives
+`server/build/install/server/`; run `bin/server` with `PORT` and
+`MANILLE_RESOURCES` (a folder with `native/` -- the engine's JNI library
+built on that machine by `:desktop:buildNative` -- and `models/`). Tables
+and players live in memory: a restart ends the games in progress.
+`/health` answers with the number of open tables.
+
+`:server:test` plays real clients against a local server: partners and
+opponents finishing deals, a drop-out and return, and what the server
+refuses. `RefereeTest` covers tables with players in any seats.
