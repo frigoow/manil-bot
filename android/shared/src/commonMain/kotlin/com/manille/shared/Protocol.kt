@@ -3,6 +3,7 @@ package com.manille.shared
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /*
  * The online game's messages, one JSON object per WebSocket text frame,
@@ -38,9 +39,20 @@ data class SeatInfo(
 
 @Serializable
 sealed interface ClientMessage {
-    /** First message on every connection; [token] is the one a [ServerMessage.Welcome] gave earlier (null the first time). */
+    /**
+     * First message on every connection; [token] is the one a
+     * [ServerMessage.Welcome] gave earlier (null the first time). [transfer]:
+     * a code from [GetTransferCode] on another device, to play as that
+     * player here (their profile and statistics).
+     */
     @Serializable @SerialName("hello")
-    data class Hello(val protocol: Int, val token: String?, val name: String) : ClientMessage
+    data class Hello(val protocol: Int, val token: String?, val name: String, val transfer: String? = null) : ClientMessage
+    /** This player's online statistics: answered with [ServerMessage.PlayerStats]. */
+    @Serializable @SerialName("stats")
+    data object GetStats : ClientMessage
+    /** A short-lived code to play as this player on another device ([ServerMessage.TransferCode]). */
+    @Serializable @SerialName("transfer")
+    data object GetTransferCode : ClientMessage
     /** Open a new table and sit at it; it gets a code to share. */
     @Serializable @SerialName("create")
     data class Create(val match: Boolean) : ClientMessage
@@ -72,9 +84,19 @@ sealed interface ClientMessage {
 
 @Serializable
 sealed interface ServerMessage {
-    /** Keep [token] to be recognised on the next connection (and so get your chair back). */
+    /**
+     * Keep [token] to be recognised on the next connection (your profile,
+     * statistics and chair). [id] is your public player id (the server's
+     * API shows profiles by it); the token is secret.
+     */
     @Serializable @SerialName("welcome")
-    data class Welcome(val token: String, val name: String) : ServerMessage
+    data class Welcome(val token: String, val name: String, val id: String = "") : ServerMessage
+    /** Your online statistics, in the app's own form (see [StatsCounting]): counters and recent games. */
+    @Serializable @SerialName("stats")
+    data class PlayerStats(val counters: Map<String, Int>, val history: List<JsonObject>) : ServerMessage
+    /** Enter [code] on another device (in [ClientMessage.Hello.transfer]) within [minutes]. */
+    @Serializable @SerialName("transfer")
+    data class TransferCode(val code: String, val minutes: Int) : ServerMessage
     /** The table you sit at: its code, its chairs, whether the game is on. Sent on every change. */
     @Serializable @SerialName("table")
     data class TableInfo(
@@ -112,4 +134,6 @@ object Problems {
     const val NOT_HOST = "not-host"
     const val NOT_NOW = "not-now"
     const val BAD_MESSAGE = "bad-message"
+    /** A transfer code that is unknown or expired. */
+    const val BAD_TRANSFER = "bad-transfer"
 }

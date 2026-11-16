@@ -161,6 +161,74 @@ class SaveStore(private val storage: Storage, profileId: String) {
 }
 
 /** Everything one finished hand contributes to the statistics. */
+/**
+ * How a hand and a finished game count in the statistics. The app's own
+ * [StatsStore] and the server's online statistics count with the same
+ * rules, so the same screen shows either.
+ */
+object StatsCounting {
+    /** The most recent finished games a history keeps. */
+    const val HISTORY_CAP = 200
+
+    /** Statistics from their JSON form ({"counters": {...}, "history": [...]}). */
+    fun read(root: JsonObject): Stats {
+        val c = mutableMapOf<String, Int>()
+        root.optObject("counters")?.let { j -> j.keys.forEach { c[it] = j.optInt(it) } }
+        // the first app version kept only these totals
+        root.optObject("totals")?.let { j -> j.keys.forEach { k -> if (k !in c) c[k] = j.optInt(k) } }
+        val h = root.optArray("history") ?: JsonArray(emptyList())
+        return Stats(c, h.mapNotNull { it as? JsonObject })
+    }
+
+    fun write(c: Map<String, Int>, history: List<JsonObject>): JsonObject = buildJsonObject {
+        put("counters", JsonObject(c.mapValues { JsonPrimitive(it.value) }))
+        put("history", JsonArray(history.takeLast(HISTORY_CAP)))
+    }
+
+    fun addHand(c: MutableMap<String, Int>, r: HandRecord) {
+        fun add(k: String, v: Int = 1) { c[k] = (c[k] ?: 0) + v }
+        val won = r.pointsUs > r.pointsThem; val lost = r.pointsUs < r.pointsThem
+        add("hands"); if (won) add("hands_won"); if (lost) add("hands_lost"); if (!won && !lost) add("hands_tied")
+        add("points_for", r.pointsUs); add("points_against", r.pointsThem)
+        add("score_for", r.scoreUs); add("score_against", r.scoreThem)
+        add("tricks_team", r.tricksUs); add("tricks_mine", r.tricksMine); add("manilles_team", r.manillesUs)
+        if (r.tricksUs == 8) add("slams"); if (r.tricksUs == 0) add("slams_against")
+        c["best_hand_points"] = maxOf(c["best_hand_points"] ?: 0, r.pointsUs)
+        if (r.weDeclared) { add("decl_hands"); if (won) add("decl_won") } else { add("def_hands"); if (won) add("def_won") }
+        if (r.iDeclared) {
+            add("my_decl"); if (won) add("my_decl_won")
+            if (r.mull) { add("my_mull"); if (won) add("my_mull_won") }
+        }
+        if (r.mull) { add("mull_hands"); if (won) add("mull_won") }
+        if (r.multiplier >= 4) { add("big_hands"); if (won) add("big_won") }
+        if (r.meegaanUs) { add("mee_us"); if (won) add("mee_us_won") }
+        if (r.meegaanMine) { add("mee_mine"); if (won) add("mee_mine_won") }
+        if (r.meegaanThem) { add("mee_them"); if (won) add("mee_them_won") }
+        if (r.terugUs) { add("ter_us"); if (won) add("ter_us_won") }
+        if (r.terugMine) { add("ter_mine"); if (won) add("ter_mine_won") }
+        if (r.terugThem) { add("ter_them"); if (won) add("ter_them_won") }
+        val streak = if (won) (c["hand_streak"] ?: 0) + 1 else 0
+        c["hand_streak"] = streak; c["best_hand_streak"] = maxOf(c["best_hand_streak"] ?: 0, streak)
+    }
+
+    fun addResult(c: MutableMap<String, Int>, match: Boolean, us: Int, them: Int) {
+        fun add(k: String, v: Int = 1) { c[k] = (c[k] ?: 0) + v }
+        if (match) {
+            add("matches"); if (us > them) add("matches_won") else add("matches_lost")
+            val streak = if (us > them) (c["match_streak"] ?: 0) + 1 else 0
+            c["match_streak"] = streak; c["best_match_streak"] = maxOf(c["best_match_streak"] ?: 0, streak)
+            if (us > them) c["best_match_margin"] = maxOf(c["best_match_margin"] ?: 0, us - them)
+        } else {
+            add("games"); when { us > them -> add("games_won"); us < them -> add("games_lost"); else -> add("games_tied") }
+        }
+    }
+
+    /** One finished game for the history: when ([seconds] since 1970), what, and the score. */
+    fun historyEntry(seconds: Long, match: Boolean, us: Int, them: Int): JsonObject = buildJsonObject {
+        put("t", seconds); put("mode", if (match) "match" else "game"); put("us", us); put("them", them)
+    }
+}
+
 data class HandRecord(
     val pointsUs: Int, val pointsThem: Int,      // card points
     val scoreUs: Int, val scoreThem: Int,        // match points scored (after the multiplier)
@@ -186,50 +254,15 @@ class StatsStore(storage: Storage, profileId: String, private val clock: () -> L
     private val files = JsonFiles(storage)
     private val name = "stats_$profileId.json"
 
-    fun load(): Stats {
-        val root = files.read(name) ?: JsonObject(emptyMap())
-        val c = mutableMapOf<String, Int>()
-        root.optObject("counters")?.let { j -> j.keys.forEach { c[it] = j.optInt(it) } }
-        // the first app version kept only these totals
-        root.optObject("totals")?.let { j -> j.keys.forEach { k -> if (k !in c) c[k] = j.optInt(k) } }
-        val h = root.optArray("history") ?: JsonArray(emptyList())
-        return Stats(c, h.mapNotNull { it as? JsonObject })
-    }
+    fun load(): Stats = StatsCounting.read(files.read(name) ?: JsonObject(emptyMap()))
 
     private fun write(c: Map<String, Int>, history: List<JsonObject>) {
-        runCatching {
-            files.write(name, buildJsonObject {
-                put("counters", JsonObject(c.mapValues { JsonPrimitive(it.value) }))
-                put("history", JsonArray(history.takeLast(HISTORY_CAP)))
-            })
-        }
+        runCatching { files.write(name, StatsCounting.write(c, history)) }
     }
 
     fun recordHand(r: HandRecord): Stats {
         val s = load(); val c = s.c.toMutableMap()
-        fun add(k: String, v: Int = 1) { c[k] = (c[k] ?: 0) + v }
-        val won = r.pointsUs > r.pointsThem; val lost = r.pointsUs < r.pointsThem
-        add("hands"); if (won) add("hands_won"); if (lost) add("hands_lost"); if (!won && !lost) add("hands_tied")
-        add("points_for", r.pointsUs); add("points_against", r.pointsThem)
-        add("score_for", r.scoreUs); add("score_against", r.scoreThem)
-        add("tricks_team", r.tricksUs); add("tricks_mine", r.tricksMine); add("manilles_team", r.manillesUs)
-        if (r.tricksUs == 8) add("slams"); if (r.tricksUs == 0) add("slams_against")
-        c["best_hand_points"] = maxOf(c["best_hand_points"] ?: 0, r.pointsUs)
-        if (r.weDeclared) { add("decl_hands"); if (won) add("decl_won") } else { add("def_hands"); if (won) add("def_won") }
-        if (r.iDeclared) {
-            add("my_decl"); if (won) add("my_decl_won")
-            if (r.mull) { add("my_mull"); if (won) add("my_mull_won") }
-        }
-        if (r.mull) { add("mull_hands"); if (won) add("mull_won") }
-        if (r.multiplier >= 4) { add("big_hands"); if (won) add("big_won") }
-        if (r.meegaanUs) { add("mee_us"); if (won) add("mee_us_won") }
-        if (r.meegaanMine) { add("mee_mine"); if (won) add("mee_mine_won") }
-        if (r.meegaanThem) { add("mee_them"); if (won) add("mee_them_won") }
-        if (r.terugUs) { add("ter_us"); if (won) add("ter_us_won") }
-        if (r.terugMine) { add("ter_mine"); if (won) add("ter_mine_won") }
-        if (r.terugThem) { add("ter_them"); if (won) add("ter_them_won") }
-        val streak = if (won) (c["hand_streak"] ?: 0) + 1 else 0
-        c["hand_streak"] = streak; c["best_hand_streak"] = maxOf(c["best_hand_streak"] ?: 0, streak)
+        StatsCounting.addHand(c, r)
         write(c, s.history)
         return load()
     }
@@ -237,19 +270,8 @@ class StatsStore(storage: Storage, profileId: String, private val clock: () -> L
     /** A quick game (one hand) or a match to 101 ended. */
     fun recordResult(match: Boolean, us: Int, them: Int): Stats {
         val s = load(); val c = s.c.toMutableMap()
-        fun add(k: String, v: Int = 1) { c[k] = (c[k] ?: 0) + v }
-        if (match) {
-            add("matches"); if (us > them) add("matches_won") else add("matches_lost")
-            val streak = if (us > them) (c["match_streak"] ?: 0) + 1 else 0
-            c["match_streak"] = streak; c["best_match_streak"] = maxOf(c["best_match_streak"] ?: 0, streak)
-            if (us > them) c["best_match_margin"] = maxOf(c["best_match_margin"] ?: 0, us - them)
-        } else {
-            add("games"); when { us > them -> add("games_won"); us < them -> add("games_lost"); else -> add("games_tied") }
-        }
-        val h = s.history + buildJsonObject {
-            put("t", clock() / 1000); put("mode", if (match) "match" else "game"); put("us", us); put("them", them)
-        }
-        write(c, h)
+        StatsCounting.addResult(c, match, us, them)
+        write(c, s.history + StatsCounting.historyEntry(clock() / 1000, match, us, them))
         return load()
     }
 
@@ -258,7 +280,6 @@ class StatsStore(storage: Storage, profileId: String, private val clock: () -> L
         write(c, s.history); return load()
     }
 
-    private companion object { const val HISTORY_CAP = 200 }
 }
 
 /**

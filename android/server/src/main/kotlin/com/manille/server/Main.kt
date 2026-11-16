@@ -15,6 +15,8 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 import kotlin.time.Duration.Companion.seconds
@@ -24,14 +26,22 @@ fun main() {
         ?: error("Set MANILLE_RESOURCES to a folder with native/ and models/ (./gradlew :server:run does)."))
     val port = System.getenv("PORT")?.toInt() ?: 8080
     val grace = System.getenv("MANILLE_GRACE_SECONDS")?.toLong()?.times(1000) ?: ServerConfig().graceMs
+    val database = System.getenv("MANILLE_DB") ?: "manille.db"
+    val admin = System.getenv("MANILLE_ADMIN_TOKEN")?.takeIf { it.isNotBlank() }
     val engine = Engines(resources)
-    val hub = Hub(engine.platform, engine.bots(), Worker(), ServerConfig(graceMs = grace))
-    engine.platform.log("listening on port $port")
-    embeddedServer(CIO, port = port, host = "0.0.0.0") { manille(hub) }.start(wait = true)
+    val store = Store(database)
+    val hub = Hub(engine.platform, engine.bots(), Worker(), ServerConfig(graceMs = grace), store)
+    Runtime.getRuntime().addShutdownHook(Thread {
+        // running games end as abandoned; then the database is closed cleanly
+        runBlocking { withContext(hub.game) { hub.close() } }
+        store.close()
+    })
+    engine.platform.log("listening on port $port; database $database; admin API ${if (admin != null) "on" else "off (set MANILLE_ADMIN_TOKEN)"}")
+    embeddedServer(CIO, port = port, host = "0.0.0.0") { manille(hub, admin) }.start(wait = true)
 }
 
-/** The routes: a health check, and the game's WebSocket. */
-fun Application.manille(hub: Hub) {
+/** The routes: a health check, the game's WebSocket, the JSON API and (with [adminToken]) the admin API. */
+fun Application.manille(hub: Hub, adminToken: String? = null) {
     install(WebSockets) {
         pingPeriod = 15.seconds
         timeout = 30.seconds
@@ -40,6 +50,8 @@ fun Application.manille(hub: Hub) {
     routing {
         get("/health") { call.respondText("ok ${hub.tableCount} tables") }
         webSocket("/play") { hub.serve(this) }
+        publicApi(hub)
+        adminApi(hub, adminToken)
     }
 }
 
