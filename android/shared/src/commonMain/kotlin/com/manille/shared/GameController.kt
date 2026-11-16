@@ -447,7 +447,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
                 if (teamOf(t.taker) == HUMAN_TEAM) manillesUs += t.cards.count { it % 8 == 7 }
             }
             is TableEvent.DealScored -> { scoreDeal(event, view); show(event, view); return }
-            TableEvent.YourCall, TableEvent.PlayStarted -> {}
+            TableEvent.YourCall, TableEvent.PlayStarted, is TableEvent.Waiting, TableEvent.Resynced -> {}
         }
         // saved where a restart can carry on: the player is asked, or cards are on the table
         if (event is TableEvent.YourCall || event is TableEvent.PlayStarted || event is TableEvent.CardPlayed) persist()
@@ -561,6 +561,22 @@ class GameController(private val platform: Platform) : AutoCloseable {
                 val turn = turnMessage(view)
                 message = if (calls.isEmpty()) turn
                     else tr("${calls.joinToString(", ")} — stakes ×${stakes(view)}. $turn", "${calls.joinToString(", ")} — inzet ×${stakes(view)}. $turn")
+            }
+            is TableEvent.Waiting -> {
+                display(view)
+                val who = seatName(event.seat)
+                message = when (event.call) {
+                    TablePhase.DECLARATION -> tr("$who is choosing trump…", "$who kiest troef…")
+                    TablePhase.MEEGAAN -> tr("$who may knock…", "$who mag kloppen…")
+                    else -> tr("$who may knock back…", "$who mag terugkloppen…")
+                }
+            }
+            TableEvent.Resynced -> {
+                // the table afresh: what was on screen of the trick is gone
+                heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
+                display(view)
+                view.asked?.takeIf { it != HUMAN }?.let { present(TableEvent.Waiting(it, view.askedCall ?: TablePhase.DECLARATION), view); return }
+                message = if (view.phase == TablePhase.PLAYING && view.board?.finished != true) turnMessage(view) else ""
             }
             is TableEvent.CardPlayed -> presentCard(event, view)
             is TableEvent.DealScored -> presentScore(event, view)

@@ -9,8 +9,8 @@ enum class TablePhase { LOBBY, DECLARATION, MEEGAAN, TERUG, PLAYING, HAND_OVER, 
  *
  * Seats are numbered from the viewer's point of view: 0 is the local player,
  * 1 on their left (West), 2 the partner (North), 3 East; teams are seat % 2,
- * so "us" is team 0. A local game is played from seat 0; a networked one
- * will rotate the server's seats so the viewer is always 0.
+ * so "us" is team 0. A local game is played from seat 0; an online one
+ * rotates the server's seats so the viewer is always 0 ([Seats]).
  *
  * The session is the referee (it deals, checks every move, runs the bots
  * and keeps the score); GameController turns what the session reports into
@@ -41,6 +41,10 @@ data class TableView(
     /** Who knocked (meegaan) and who knocked back (terug) this deal. */
     val meegaanSeat: Int?,
     val terugSeat: Int?,
+    /** Whose call the table waits for (declaration, meegaan or terug), when it is a player's. */
+    val asked: Int? = null,
+    /** The call [asked] must answer: DECLARATION, MEEGAAN or TERUG. */
+    val askedCall: TablePhase? = null,
 ) {
     companion object {
         val LOBBY = TableView(TablePhase.LOBBY, null, 0L, emptyList(), List(4) { 0 }, 0, 0, true, 0, 0, null, null)
@@ -62,6 +66,10 @@ sealed interface TableEvent {
     data class KnockedBack(val seat: Int) : TableEvent
     /** The viewer must answer: [TableView.phase] says what (declare, knock, knock back). */
     data object YourCall : TableEvent
+    /** Another player must answer [call] (DECLARATION, MEEGAAN or TERUG); the table waits for them. */
+    data class Waiting(val seat: Int, val call: TablePhase) : TableEvent
+    /** The table was sent afresh (an online table after reconnecting): show [TableView] as it is. */
+    data object Resynced : TableEvent
     /** The calls are done; the player left of the dealer leads. */
     data object PlayStarted : TableEvent
     /**
