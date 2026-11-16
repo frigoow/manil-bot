@@ -134,8 +134,10 @@ class Referee(
      */
     fun view(viewer: Int): TableView {
         if (phase == TablePhase.LOBBY) return TableView.LOBBY.copy(match = matchMode)
-        val board = game.state()
         val calling = phase == TablePhase.DECLARATION || phase == TablePhase.MEEGAAN || phase == TablePhase.TERUG
+        // Until the dealer declares, the engine holds the trump its own rule
+        // picked from the dealer's hand: only the dealer may see that.
+        val board = game.state().let { b -> if (phase == TablePhase.DECLARATION && viewer != dealer) b.copy(trumpSuit = -1, multiplier = 1) else b }
         return TableView(
             phase = if (calling && asked != viewer) TablePhase.PLAYING else phase,
             board = board,

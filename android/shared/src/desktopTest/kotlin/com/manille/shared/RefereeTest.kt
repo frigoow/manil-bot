@@ -102,6 +102,8 @@ class RefereeTest {
                         val v = referee.view(other)
                         if (other == seat) run.check(v.phase == event.call) { "asked seat sees ${v.phase}" }
                         else run.check(v.phase == TablePhase.PLAYING && v.asked == seat && v.askedCall == event.call) { "seat $other sees ${v.phase}" }
+                        if (other != seat && event.call == TablePhase.DECLARATION)
+                            run.check(v.board!!.trumpSuit == -1 && v.board!!.multiplier == 1) { "seat $other sees the dealer's trump before the declaration" }
                     }
                     if (onAsked(referee, seat, event)) return@listener
                     later {

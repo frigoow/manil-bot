@@ -173,6 +173,7 @@ private fun ManilleApp(controller: GameController) {
     ) {
         when {
             controller.phase != TablePhase.LOBBY -> GameScene(controller)
+            controller.isOnline -> OnlineScreen(controller)
             screen == "stats" -> StatsScreen(controller) { screen = "lobby" }
             else -> Lobby(controller) { screen = "stats" }
         }
@@ -206,6 +207,10 @@ private fun Lobby(controller: GameController, openStats: () -> Unit) {
             Row(Modifier.widthIn(max = 480.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ModeButton(tr("Quick game", "Snel spel"), tr("One standalone hand", "Eén los spel"), Modifier.weight(1f)) { controller.start(false) }
                 ModeButton(tr("Match to 101", "Match tot 101"), tr("Keep score across hands", "Score over meerdere spellen"), Modifier.weight(1f)) { controller.start(true) }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.widthIn(max = 480.dp)) {
+                ModeButton(tr("Online", "Online"), tr("Play with friends at one table", "Speel met vrienden aan één tafel"), Modifier.weight(1f)) { controller.openOnline() }
             }
             Spacer(Modifier.height(10.dp))
             StatsSummary(controller.stats, openStats)
@@ -653,7 +658,7 @@ private fun ScoreBox(label: String, score: Int, color: Color, modifier: Modifier
 /** Trump (or ? / no trump) with the stake multiplier. */
 @Composable
 private fun TrumpChip(controller: GameController, state: BoardState, size: Dp = 52.dp) = Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    val declared = controller.phase != TablePhase.DECLARATION
+    val declared = controller.trumpChosen
     Box {
         Surface(modifier = Modifier.size(size), shape = CircleShape, color = Color(0xFFFFFDF6), border = BorderStroke(2.dp, Gold), shadowElevation = 6.dp) {
             Box(contentAlignment = Alignment.Center) {
@@ -775,7 +780,8 @@ private fun LastTrickDialog(controller: GameController, close: () -> Unit) {
 
 @Composable
 private fun HintButton(controller: GameController) {
-    val cardHint = controller.phase == TablePhase.PLAYING && controller.board?.currentPlayer == 0 && !controller.trickPaused
+    // card hints need the whole table (offline); trump and knock hints only your own hand
+    val cardHint = controller.phase == TablePhase.PLAYING && controller.board?.currentPlayer == 0 && !controller.trickPaused && !controller.isOnline
     val callHint = controller.phase == TablePhase.DECLARATION || controller.phase == TablePhase.MEEGAAN || controller.phase == TablePhase.TERUG
     val enabled = cardHint || callHint
     val showing = controller.hints.isNotEmpty() || controller.declarationHints.isNotEmpty() || controller.callHints != null
@@ -1101,12 +1107,15 @@ private fun Table(controller: GameController, state: BoardState, sizes: Sizes, c
 @Composable
 private fun CallBubbles(controller: GameController, state: BoardState, player: Int, modifier: Modifier,
                         tail: Tail = Tail.BottomStart, reaction: String? = null) {
-    if (controller.phase == TablePhase.DECLARATION || controller.phase == TablePhase.LOBBY) return
+    if (controller.phase == TablePhase.LOBBY) return
     val lines = mutableListOf<Pair<String, Color>>()
-    if (player == state.declarer) lines += (if (state.trumpSuit < 0) tr("Mull! ×2", "Mull! ×2") else tr("${suitSymbol(state.trumpSuit)} trump!", "${suitSymbol(state.trumpSuit)} troef!")) to
-        (if (state.trumpSuit < 0) Wood else suitTint(state.trumpSuit, controller.fourColor))
-    if (controller.meegaanBy == player) lines += tr("Knock!", "Klop!") to CardRed
-    if (controller.terugBy == player) lines += tr("Knock back!", "Terugklop!") to CardRed
+    // the calls once trump is chosen; a reaction (online: another player's) any time
+    if (controller.trumpChosen) {
+        if (player == state.declarer) lines += (if (state.trumpSuit < 0) tr("Mull! ×2", "Mull! ×2") else tr("${suitSymbol(state.trumpSuit)} trump!", "${suitSymbol(state.trumpSuit)} troef!")) to
+            (if (state.trumpSuit < 0) Wood else suitTint(state.trumpSuit, controller.fourColor))
+        if (controller.meegaanBy == player) lines += tr("Knock!", "Klop!") to CardRed
+        if (controller.terugBy == player) lines += tr("Knock back!", "Terugklop!") to CardRed
+    }
     if (lines.isEmpty() && reaction == null) return
     val align = if (tail == Tail.BottomEnd) Alignment.End else Alignment.Start
     Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp), horizontalAlignment = align) {
@@ -1480,9 +1489,16 @@ private fun HandOver(controller: GameController, state: BoardState) {
                     Button(onClick = controller::lobby, colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = .1f), contentColor = Ink)) {
                         Text("Lobby")
                     }
-                    Button(onClick = { if (matchOver) controller.start(true) else controller.newDeal() },
+                    // online: the next deal waits for every player; only the host starts a new match
+                    val waiting = controller.waitingForOthers || (matchOver && controller.isOnline && !controller.onlineHost)
+                    Button(onClick = { if (matchOver) controller.start(true) else controller.newDeal() }, enabled = !waiting,
                         colors = ButtonDefaults.buttonColors(containerColor = GoldBright, contentColor = Wood)) {
-                        Text(if (matchOver) tr("Play again", "Opnieuw spelen") else tr("Next hand", "Volgend spel"), fontWeight = FontWeight.Bold)
+                        Text(when {
+                            waiting && matchOver -> tr("Waiting for the host…", "Wachten op de gastheer…")
+                            waiting -> tr("Waiting for the others…", "Wachten op de anderen…")
+                            matchOver -> tr("Play again", "Opnieuw spelen")
+                            else -> tr("Next hand", "Volgend spel")
+                        }, fontWeight = FontWeight.Bold)
                     }
                 }
             }

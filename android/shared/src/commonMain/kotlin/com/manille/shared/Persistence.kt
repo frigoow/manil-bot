@@ -276,3 +276,38 @@ fun formatFixed(x: Double, decimals: Int): String {
     val sep = if (Lang.dutch) "," else "."
     return (if (neg && v != 0L) "-" else "") + whole + (if (decimals > 0) sep + frac else "")
 }
+
+/**
+ * The online game's settings: the last server address, and per profile and
+ * server the token that server gave (so a dropped connection gets its chair
+ * back, and the server knows the player again next time).
+ */
+class OnlineStore(storage: Storage) {
+    private val files = JsonFiles(storage)
+    var server: String = ""; private set
+    /** The name the other players see. */
+    var name: String = ""; private set
+    private var tokens: Map<String, String> = emptyMap()
+
+    init {
+        files.read(FILE)?.let { j ->
+            server = j.optString("server")
+            name = j.optString("name")
+            tokens = j.optObject("tokens")?.let { t -> t.keys.associateWith { t.optString(it) } }.orEmpty()
+        }
+    }
+
+    fun token(key: String): String? = tokens[key]?.takeIf { it.isNotEmpty() }
+    fun setToken(key: String, token: String) { tokens = tokens + (key to token); save() }
+    fun setServer(url: String, playerName: String) { server = url; name = playerName; save() }
+
+    private fun save() = runCatching {
+        files.write(FILE, buildJsonObject {
+            put("server", server)
+            put("name", name)
+            put("tokens", JsonObject(tokens.mapValues { JsonPrimitive(it.value) }))
+        })
+    }
+
+    private companion object { const val FILE = "online.json" }
+}

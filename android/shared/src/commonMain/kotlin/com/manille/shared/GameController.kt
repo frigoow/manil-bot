@@ -83,7 +83,84 @@ class GameController(private val platform: Platform) : AutoCloseable {
         s.listener = ::onEvent
         s.onBotThought = ::recordBotMs
     }
-    private val table: TableSession get() = session
+    private val table: TableSession get() = remote ?: session
+
+    // ---- online ---------------------------------------------------------------
+    private val onlineStore = OnlineStore(storage)
+    /** The table on the server, while the player is online. */
+    private var remote: RemoteSession? = null
+    /** The online screens' state; null when the player is not online. */
+    var online by mutableStateOf<OnlineState?>(null); private set
+    /** The last server address used. */
+    var serverUrl by mutableStateOf(onlineStore.server); private set
+    /** The name to play under online (the profile's, unless it is still the default). */
+    var onlineName by mutableStateOf(onlineStore.name.ifEmpty { profileStore.active.name.takeIf { it != "You" }.orEmpty() }); private set
+    val isOnline: Boolean get() = online != null
+    /** Online: this player may start the (next) game. */
+    val onlineHost: Boolean get() = online?.info?.host == true
+    /** Online: this player asked for the next deal and waits for the others. */
+    val waitingForOthers: Boolean get() = online?.info?.let { it.you in it.ready } == true
+
+    /** Opens the online screens (not yet connected). */
+    fun openOnline() { if (online == null) online = OnlineState(null) }
+
+    /** Connects to [url] as this profile; the server's token for it is kept for next time. */
+    fun connect(url: String, name: String) {
+        disconnect()
+        val address = url.trim()
+        onlineName = name.trim()
+        onlineStore.setServer(address, onlineName); serverUrl = address
+        val key = "${profileStore.activeId}@$address"
+        val r = RemoteSession(address, onlineName, onlineStore.token(key))
+        r.listener = ::onEvent
+        r.onToken = { onlineStore.setToken(key, it) }
+        r.onStatus = { status ->
+            online = online?.copy(status = status)
+            if (status != RemoteSession.Status.ONLINE && phase != TablePhase.LOBBY)
+                message = tr("Connection lost — reconnecting…", "Verbinding verbroken — opnieuw verbinden…")
+        }
+        r.onInfo = { info ->
+            val wasStarted = online?.info?.started == true
+            val wasAway = online?.info?.seats?.map { it.away }
+            online = online?.copy(info = info, problem = null)
+            // someone left or came back: the turn line names them as they are now
+            if (info != null && wasAway != null && wasAway != info.seats.map { it.away } &&
+                phase == TablePhase.PLAYING && !trickPaused && shown.board?.finished == false) message = turnMessage(shown)
+            // a new game at this table: the screen starts clean
+            if (info != null && info.started && !wasStarted) resetScreen()
+        }
+        r.onReaction = { seat, text ->
+            reactions = reactions + (seat to text)
+            later(REACTION_MS) { if (reactions[seat] == text) reactions = reactions - seat }
+        }
+        r.onProblem = { _, text -> online = online?.copy(problem = text) }
+        r.onLeft = { leftTable() }
+        remote = r
+        online = OnlineState(r.status)
+    }
+
+    /** Disconnects and stays on the online screen (to change the server). */
+    fun disconnect() {
+        remote?.let { r -> if (r.info != null) r.leave(); r.close() }
+        remote = null
+        if (online != null) online = OnlineState(null)
+        if (phase != TablePhase.LOBBY) leftTable()
+    }
+
+    /** Back to offline play. */
+    fun closeOnline() { disconnect(); online = null }
+
+    fun createTable(match: Boolean) { remote?.create(match) }
+    fun joinTable(code: String) { remote?.join(code) }
+    fun sit(seat: Int) { remote?.sit(seat) }
+    fun startOnline() { remote?.startGame() }
+
+    private fun leftTable() {
+        resetScreen()
+        board = null; handMask = 0L; legalCards = emptyList(); phase = TablePhase.LOBBY
+        usScore = 0; themScore = 0; reactions = emptyMap()
+        message = tr("Choose a table to start.", "Kies een tafel om te beginnen.")
+    }
 
     var board by mutableStateOf<BoardState?>(null); private set
     var handMask by mutableStateOf(0L); private set
@@ -149,6 +226,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     }
 
     fun start(match: Boolean) {
+        // online the host starts the next game for the whole table
+        remote?.let { it.startGame(); return }
         pickNames()
         resetScreen()
         session.start(match)
@@ -159,12 +238,16 @@ class GameController(private val platform: Platform) : AutoCloseable {
     val meegaanBy: Int? get() = shown.meegaanSeat
     val terugBy: Int? get() = shown.terugSeat
     val dealerSeat: Int get() = shown.dealer
+    /** The dealer has declared (online, someone else may still be choosing). */
+    val trumpChosen: Boolean get() = phase != TablePhase.DECLARATION && shown.askedCall != TablePhase.DECLARATION
 
     /** Start the current kind of game over (the save is replaced). */
-    fun restart() { saves.clear(); start(shown.match) }
+    fun restart() { if (remote != null) return; saves.clear(); start(shown.match) }
 
     // ---- profiles ---------------------------------------------------------
     private fun reloadProfile() {
+        // online the player is known by profile: a new profile connects anew
+        closeOnline()
         saves = SaveStore(storage, profileStore.activeId)
         statsStore = newStatsStore(profileStore.activeId)
         stats = statsStore.load(); savedGame = saveSummary()
@@ -199,6 +282,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     // ---- bot reactions ------------------------------------------------------
     private fun react(seat: Int, vararg choices: String) {
         if (!smileys || seat == HUMAN || seat !in 0..3) return
+        // online, the people at the table speak for themselves
+        online?.info?.let { info -> if (!info.seats[(info.you + seat) % 4].bot) return }
         val emoji = choices[Random.nextInt(choices.size)]
         reactions = reactions + (seat to emoji)
         later(REACTION_MS) { if (reactions[seat] == emoji) reactions = reactions - seat }
@@ -214,6 +299,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     fun sendReaction(text: String, lineMood: String? = null) {
         reactions = reactions + (HUMAN to text)
         later(REACTION_MS) { if (reactions[HUMAN] == text) reactions = reactions - HUMAN }
+        remote?.react(text)
         if (!smileys) return
         val mood = lineMood ?: when (text) {
             "😏", "😎", "😂", "🤑" -> "taunt"; "😩", "😅", "🙈" -> "sad"; "👍", "👏", "🎉" -> "cheer"
@@ -373,6 +459,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     }
 
     fun lobby() {
+        // online: leave the table, stay connected (the online screen shows next)
+        remote?.let { r -> if (r.info != null) r.leave(); leftTable(); return }
         session.stop(); resetScreen()
         phase = TablePhase.LOBBY; message = tr("Choose a table to start.", "Kies een tafel om te beginnen.")
         savedGame = saveSummary()
@@ -472,7 +560,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
             !view.match -> stats = statsStore.recordResult(false, b.team0Points, b.team1Points)
             view.phase == TablePhase.MATCH_OVER -> stats = statsStore.recordResult(true, view.usScore, view.themScore)
         }
-        // a finished quick game or match has nothing left to resume
+        // a finished quick game or match has nothing left to resume (online games are not saved here)
+        if (remote != null) return
         if (!view.match || view.phase == TablePhase.MATCH_OVER) { saves.clear(); savedGame = null } else persist()
     }
 
@@ -644,6 +733,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     // ---- saved game -----------------------------------------------------
     /** The session's state plus what only the screen knows (names, summaries, this hand's books). */
     private fun persist() {
+        if (remote != null) return
         val own = session.save() ?: return
         val save = JsonObject(own + buildJsonObject {
             put("names", JsonArray(botNames.map { JsonPrimitive(it) }))
@@ -694,7 +784,10 @@ class GameController(private val platform: Platform) : AutoCloseable {
     // ---- the player's moves ---------------------------------------------
 
     /** The next deal, after a hand is over. */
-    fun newDeal() { session.newDeal() }
+    fun newDeal() {
+        val r = remote ?: run { session.newDeal(); return }
+        if (r.nextDeal()) message = tr("Waiting for the other players…", "Wachten op de andere spelers…")
+    }
 
     fun declare(trump: Int) {
         if (phase != TablePhase.DECLARATION) return
@@ -830,6 +923,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     private fun declarationIndex(): Int = board?.trumpSuit?.let { if (it < 0) 4 else it } ?: 4
 
     override fun close() {
+        remote?.close()
         session.close(); scope.cancel()
         // a move or hint in flight still uses the nets: free them once it is done
         CoroutineScope(Dispatchers.Default).launch {
@@ -843,7 +937,12 @@ class GameController(private val platform: Platform) : AutoCloseable {
     val meegaanName: String? get() = shown.meegaanSeat?.let { seatName(it) }
     val terugName: String? get() = shown.terugSeat?.let { seatName(it) }
 
-    fun seatName(player: Int) = if (player == HUMAN) tr("You", "Jij") else botNames[player - 1]
+    fun seatName(player: Int): String {
+        if (player == HUMAN) return tr("You", "Jij")
+        // online: a player whose connection dropped is marked while a bot plays for them
+        online?.info?.let { info -> return info.seats[(info.you + player) % 4].let { s -> (s.name ?: "?") + if (s.away) " 💤" else "" } }
+        return botNames[player - 1]
+    }
     fun trumpLabel(suit: Int) = if (suit < 0) tr("mull", "mull") else (if (Lang.dutch) arrayOf("ruiten", "harten", "klaveren", "schoppen") else arrayOf("diamonds", "hearts", "clubs", "spades"))[suit]
     fun trumpSymbol(suit: Int) = if (suit < 0) tr("∅ (mull)", "∅ (mull)") else arrayOf("♦", "♥", "♣", "♠")[suit]
     fun playerHandMask(player: Int): Long = table.openHand(player) ?: 0L

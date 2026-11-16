@@ -8,6 +8,8 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -57,6 +59,7 @@ class RemoteSession(
     private val scope = CoroutineScope(SupervisorJob() + main)
     private var outbox = Channel<ClientMessage>(Channel.UNLIMITED)
     private var closed = false
+    private var sender: Job? = null
 
     init { scope.launch { connectLoop() } }
 
@@ -68,16 +71,16 @@ class RemoteSession(
                 client.webSocket(url) {
                     val out = Channel<ClientMessage>(Channel.UNLIMITED).also { outbox = it }
                     send(Frame.Text(ProtocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Hello(PROTOCOL_VERSION, token, name))))
-                    val sender = launch {
+                    val sending = launch {
                         for (message in out) send(Frame.Text(ProtocolJson.encodeToString(ClientMessage.serializer(), message)))
-                    }
+                    }.also { sender = it }
                     for (frame in incoming) {
                         if (frame !is Frame.Text) continue
                         val message = runCatching { ProtocolJson.decodeFromString(ServerMessage.serializer(), frame.readText()) }.getOrNull() ?: continue
                         withContext(main) { receive(message) }
                         backoff = 500L
                     }
-                    sender.cancel(); out.close()
+                    sending.cancel(); out.close()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -127,9 +130,15 @@ class RemoteSession(
 
     /** Disconnects (the chair stays this player's for a while; [leave] first to give it up). */
     override fun close() {
+        if (closed) return
         closed = true
+        // what is already queued (a "leave") still goes out, briefly
         outbox.close()
-        scope.cancel()
-        client.close()
+        val pending = sender
+        scope.launch {
+            if (pending != null) withTimeoutOrNull(1_000) { pending.join() }
+            scope.cancel()
+            client.close()
+        }
     }
 }
