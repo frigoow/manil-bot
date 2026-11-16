@@ -375,6 +375,11 @@ int manille_mobile_clone(const ManilleMobileGame* game, ManilleMobileGame** out_
     });
 }
 
+}  // extern "C"
+
+// C++ helpers, outside the extern "C" block: MSVC gives even an anonymous
+// namespace's functions C linkage there, and then refuses their C++ return
+// types (GCC and Clang ignore linkage for internal functions).
 namespace {
 
 rollout::History history_of(const ManilleGame& g) {
@@ -433,6 +438,8 @@ std::vector<rollout::World> sample_worlds(const ManilleGame& g, bool trump_rule_
 }
 
 }  // namespace
+
+extern "C" {
 
 int manille_mobile_sample_worlds(const ManilleMobileGame* game, int32_t trump_rule_known,
                                  int32_t n_worlds, int64_t* out_current,
