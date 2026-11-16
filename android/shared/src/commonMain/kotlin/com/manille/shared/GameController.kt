@@ -831,7 +831,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     private companion object {
         // the screen's side of a finished trick (the session waits as long: Pacing)
         const val TRICK_HOLD_MS = 1400L
-        const val COLLECT_MS = 380L
+        // the sweep to the winner (ManilleUi's TrickCard: at most 500 ms on a big window)
+        const val COLLECT_MS = 520L
         const val REACTION_MS = 2600L
         // hint softmax temperature, in final team points (gui/hints.py TAU_PTS)
         const val TAU_PTS = 1.0
