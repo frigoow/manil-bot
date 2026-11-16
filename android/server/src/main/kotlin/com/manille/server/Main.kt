@@ -2,6 +2,7 @@ package com.manille.server
 
 import com.manille.jvm.JvmPlatform
 import com.manille.jvm.NativeLibrary
+import com.manille.jvm.OrtSessions
 import com.manille.shared.*
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -47,6 +48,8 @@ class Engines(private val resources: File) {
     val platform: Platform by lazy {
         val library = File(resources, "native/" + System.mapLibraryName("manille_mobile"))
         NativeLibrary.load = { System.load(library.absolutePath) }
+        // memory over a few ms per bot move, as on the desktop (OrtSessions)
+        OrtSessions.prepacking = false
         JvmPlatform(
             modelFile = { File(resources, "models/$it").also { f -> check(f.isFile) { "missing $f" } } },
             dataDir = Files.createTempDirectory("manille-server").toFile(),

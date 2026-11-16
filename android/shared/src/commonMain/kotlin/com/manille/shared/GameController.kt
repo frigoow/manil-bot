@@ -518,8 +518,9 @@ class GameController(private val platform: Platform) : AutoCloseable {
                 declarationSummary = ""; meegaanSummary = null; terugSummary = null
             }
             is TableEvent.Declared -> {
-                // the mull nets only while a mull deal needs them (RuleBot)
-                ruleBot?.let { bot -> onWorker { if (event.trump < 0) bot.prepareMull() else bot.releaseMull() } }
+                // the mull nets only while an offline mull deal needs them
+                // (RuleBot); online, the server's bots play and hints are off
+                if (remote == null) ruleBot?.let { bot -> onWorker { if (event.trump < 0) bot.prepareMull() else bot.releaseMull() } }
                 declarationSummary =
                     if (event.seat == HUMAN) tr("You declared ${trumpSymbol(event.trump)}", "Jij koos ${trumpSymbol(event.trump)}")
                     else tr("${seatName(event.seat)} declared ${trumpSymbol(event.trump)}", "${seatName(event.seat)} koos ${trumpSymbol(event.trump)}")
