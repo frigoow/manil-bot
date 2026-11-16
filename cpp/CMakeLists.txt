@@ -10,6 +10,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# The desktop app's JNI library (android/desktop builds it through Gradle):
+# the same engine as the phone's libmanille_mobile.so, for the JVM on
+# Windows, macOS or Linux. It ships next to the app, so on Windows it links
+# the C runtime statically rather than needing the VC++ redistributable.
+option(MANILLE_JNI "Build the desktop JNI library manille_mobile" OFF)
+if(MANILLE_JNI AND MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 find_package(Threads REQUIRED)
 enable_testing()
 
@@ -40,6 +49,33 @@ endfunction()
 
 manille_configure(manille_mobile_core)
 target_link_libraries(manille_mobile_core PRIVATE Threads::Threads)
+
+if(MANILLE_JNI)
+    # jni.h: JNI_INCLUDE_DIRS when given (Gradle passes the directory it
+    # found), else the JDK at JAVA_HOME, else CMake's own search.
+    if(DEFINED JNI_INCLUDE_DIRS)
+    elseif(DEFINED JAVA_HOME AND EXISTS "${JAVA_HOME}/include/jni.h")
+        file(GLOB JNI_MD_DIRS LIST_DIRECTORIES true "${JAVA_HOME}/include/*")
+        set(JNI_INCLUDE_DIRS "${JAVA_HOME}/include")
+        foreach(dir ${JNI_MD_DIRS})
+            if(IS_DIRECTORY "${dir}")
+                list(APPEND JNI_INCLUDE_DIRS "${dir}")
+            endif()
+        endforeach()
+    else()
+        find_package(JNI REQUIRED)
+    endif()
+    add_library(manille_mobile SHARED jni/jni_bridge.cpp)
+    manille_configure(manille_mobile)
+    target_include_directories(manille_mobile PRIVATE ${JNI_INCLUDE_DIRS})
+    target_link_libraries(manille_mobile PRIVATE manille_mobile_core Threads::Threads)
+    # MANILLE_JNI_OUT: where Gradle collects it (no per-config subdirectory)
+    if(DEFINED MANILLE_JNI_OUT)
+        set_target_properties(manille_mobile PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "$<1:${MANILLE_JNI_OUT}>"
+            RUNTIME_OUTPUT_DIRECTORY "$<1:${MANILLE_JNI_OUT}>")
+    endif()
+endif()
 
 foreach(test mobile_api trump_rule trump_constrained_sampler)
     add_executable(manille_test_${test} test_${test}.cpp)

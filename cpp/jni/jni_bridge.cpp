@@ -28,7 +28,7 @@ bool check(int status, JNIEnv* env) {
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeNewDeal(
+Java_com_manille_jvm_NativeGame_nativeNewDeal(
     JNIEnv* env,
     jclass,
     jint dealer,
@@ -41,7 +41,7 @@ Java_com_manille_androidapp_NativeGame_nativeNewDeal(
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeNewDealWithTrump(
+Java_com_manille_jvm_NativeGame_nativeNewDealWithTrump(
     JNIEnv* env, jclass, jint dealer, jlong seed, jint trump
 ) {
     ManilleMobileGame* game = nullptr;
@@ -52,12 +52,12 @@ Java_com_manille_androidapp_NativeGame_nativeNewDealWithTrump(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeClose(JNIEnv*, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeClose(JNIEnv*, jclass, jlong handle) {
     manille_mobile_destroy(game_from(handle));
 }
 
 extern "C" JNIEXPORT jintArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeState(JNIEnv* env, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeState(JNIEnv* env, jclass, jlong handle) {
     ManilleMobileState state{};
     if (!check(manille_mobile_get_state(game_from(handle), &state), env))
         return nullptr;
@@ -76,7 +76,7 @@ Java_com_manille_androidapp_NativeGame_nativeState(JNIEnv* env, jclass, jlong ha
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeHandMask(
+Java_com_manille_jvm_NativeGame_nativeHandMask(
     JNIEnv* env, jclass, jlong handle, jint player
 ) {
     int64_t mask = 0;
@@ -86,7 +86,7 @@ Java_com_manille_androidapp_NativeGame_nativeHandMask(
 }
 
 extern "C" JNIEXPORT jintArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeLegalCards(JNIEnv* env, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeLegalCards(JNIEnv* env, jclass, jlong handle) {
     float obs[MANILLE_MOBILE_OBS_DIM]{};
     float action[MANILLE_MOBILE_MAX_LEGAL * MANILLE_MOBILE_ACT_DIM]{};
     int32_t cards[MANILLE_MOBILE_MAX_LEGAL]{};
@@ -102,7 +102,7 @@ Java_com_manille_androidapp_NativeGame_nativeLegalCards(JNIEnv* env, jclass, jlo
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeObservation(
+Java_com_manille_jvm_NativeGame_nativeObservation(
     JNIEnv* env, jclass, jlong handle, jint observer
 ) {
     std::array<float, MANILLE_MOBILE_OBS_DIM> obs{};
@@ -118,7 +118,7 @@ Java_com_manille_androidapp_NativeGame_nativeObservation(
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeActionFeatures(
+Java_com_manille_jvm_NativeGame_nativeActionFeatures(
     JNIEnv* env, jclass, jlong handle, jint observer
 ) {
     std::array<float, MANILLE_MOBILE_OBS_DIM> obs{};
@@ -134,7 +134,7 @@ Java_com_manille_androidapp_NativeGame_nativeActionFeatures(
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeGruRaw(
+Java_com_manille_jvm_NativeGame_nativeGruRaw(
     JNIEnv* env, jclass, jlong handle, jint observer
 ) {
     std::array<float, MANILLE_MOBILE_MAX_PLAYS * MANILLE_MOBILE_RAW_TOKEN_DIM> raw{};
@@ -154,7 +154,7 @@ Java_com_manille_androidapp_NativeGame_nativeGruRaw(
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeGruLength(
+Java_com_manille_jvm_NativeGame_nativeGruLength(
     JNIEnv* env, jclass, jlong handle, jint observer
 ) {
     std::array<float, MANILLE_MOBILE_MAX_PLAYS * MANILLE_MOBILE_RAW_TOKEN_DIM> raw{};
@@ -171,7 +171,7 @@ Java_com_manille_androidapp_NativeGame_nativeGruLength(
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeGruGlobal(
+Java_com_manille_jvm_NativeGame_nativeGruGlobal(
     JNIEnv* env, jclass, jlong handle, jint observer
 ) {
     std::array<float, MANILLE_MOBILE_MAX_PLAYS * MANILLE_MOBILE_RAW_TOKEN_DIM> raw{};
@@ -191,33 +191,33 @@ Java_com_manille_androidapp_NativeGame_nativeGruGlobal(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeApplyCard(
+Java_com_manille_jvm_NativeGame_nativeApplyCard(
     JNIEnv* env, jclass, jlong handle, jint card
 ) {
     check(manille_mobile_apply_card(game_from(handle), card), env);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeAnnounceDouble(
+Java_com_manille_jvm_NativeGame_nativeAnnounceDouble(
     JNIEnv* env, jclass, jlong handle, jint player
 ) {
     check(manille_mobile_announce_double(game_from(handle), player), env);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeAnnounceRedouble(
+Java_com_manille_jvm_NativeGame_nativeAnnounceRedouble(
     JNIEnv* env, jclass, jlong handle, jint player
 ) {
     check(manille_mobile_announce_redouble(game_from(handle), player), env);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeStartPlaying(JNIEnv* env, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeStartPlaying(JNIEnv* env, jclass, jlong handle) {
     check(manille_mobile_start_playing(game_from(handle)), env);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_manille_androidapp_NativeGame_nativeHandScore(
+Java_com_manille_jvm_NativeGame_nativeHandScore(
     JNIEnv* env, jclass, jlong handle, jint team
 ) {
     int32_t score = 0;
@@ -230,7 +230,7 @@ Java_com_manille_androidapp_NativeGame_nativeHandScore(
 // floats (BeliefNet on nativeObservation) or null; q: 32 floats by card
 // (QNet values of the legal cards) or null.
 extern "C" JNIEXPORT jint JNICALL
-Java_com_manille_androidapp_NativeGame_nativeRuleChoose(
+Java_com_manille_jvm_NativeGame_nativeRuleChoose(
     JNIEnv* env, jclass, jlong handle, jfloatArray belief, jfloatArray q,
     jboolean trump_rule_known, jint n_worlds
 ) {
@@ -266,7 +266,7 @@ Java_com_manille_androidapp_NativeGame_nativeRuleChoose(
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeClone(JNIEnv* env, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeClone(JNIEnv* env, jclass, jlong handle) {
     ManilleMobileGame* copy = nullptr;
     if (!check(manille_mobile_clone(game_from(handle), &copy), env))
         return 0;
@@ -275,7 +275,7 @@ Java_com_manille_androidapp_NativeGame_nativeClone(JNIEnv* env, jclass, jlong ha
 
 // [4 x n current hands, then 4 x n dealt hands], n = worlds actually drawn.
 extern "C" JNIEXPORT jlongArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeSampleWorlds(
+Java_com_manille_jvm_NativeGame_nativeSampleWorlds(
     JNIEnv* env, jclass, jlong handle, jboolean trump_rule_known, jint n_worlds
 ) {
     if (n_worlds < 0)
@@ -294,7 +294,7 @@ Java_com_manille_androidapp_NativeGame_nativeSampleWorlds(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_manille_androidapp_NativeGame_nativeRuleChooseWorlds(
+Java_com_manille_jvm_NativeGame_nativeRuleChooseWorlds(
     JNIEnv* env, jclass, jlong handle, jlongArray worlds, jint n_worlds,
     jfloatArray belief, jfloatArray q, jdoubleArray extra, jdoubleArray out_values, jlong fast_net
 ) {
@@ -346,7 +346,7 @@ Java_com_manille_androidapp_NativeGame_nativeRuleChooseWorlds(
 // The fast learned play-out net (manille_fast_policy_v1.bin): a native
 // handle shared by every rule-agent call, 0 when it failed to load.
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeFastNetLoad(JNIEnv* env, jclass, jstring path) {
+Java_com_manille_jvm_NativeGame_nativeFastNetLoad(JNIEnv* env, jclass, jstring path) {
     const char* p = env->GetStringUTFChars(path, nullptr);
     ManilleFastNet* net = nullptr;
     const int status = manille_mobile_fastnet_load(p, &net);
@@ -357,7 +357,7 @@ Java_com_manille_androidapp_NativeGame_nativeFastNetLoad(JNIEnv* env, jclass, js
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeFastNetFree(JNIEnv*, jclass, jlong net) {
+Java_com_manille_jvm_NativeGame_nativeFastNetFree(JNIEnv*, jclass, jlong net) {
     manille_mobile_fastnet_free(reinterpret_cast<ManilleFastNet*>(net));
 }
 
@@ -365,13 +365,13 @@ Java_com_manille_androidapp_NativeGame_nativeFastNetFree(JNIEnv*, jclass, jlong 
 // before the handle is shared with worker threads.
 // Nonzero: the net finishes the trick its plies end in. Set before sharing.
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeFastNetSetTrickEnd(JNIEnv* env, jclass, jlong net,
+Java_com_manille_jvm_NativeGame_nativeFastNetSetTrickEnd(JNIEnv* env, jclass, jlong net,
                                                                 jboolean on) {
     check(manille_mobile_fastnet_set_trick_end(reinterpret_cast<ManilleFastNet*>(net), on ? 1 : 0), env);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_manille_androidapp_NativeGame_nativeFastNetSetPlies(JNIEnv* env, jclass, jlong net,
+Java_com_manille_jvm_NativeGame_nativeFastNetSetPlies(JNIEnv* env, jclass, jlong net,
                                                              jint plies) {
     check(manille_mobile_fastnet_set_plies(reinterpret_cast<ManilleFastNet*>(net), plies), env);
 }
@@ -380,7 +380,7 @@ Java_com_manille_androidapp_NativeGame_nativeFastNetSetPlies(JNIEnv* env, jclass
 // 32 played cards and their 32 players, then the 4 current hands (as 8 ints:
 // low, high 32 bits per seat). nativeRestore takes the same array back.
 extern "C" JNIEXPORT jintArray JNICALL
-Java_com_manille_androidapp_NativeGame_nativeSnapshot(JNIEnv* env, jclass, jlong handle) {
+Java_com_manille_jvm_NativeGame_nativeSnapshot(JNIEnv* env, jclass, jlong handle) {
     ManilleMobileState s{};
     if (!check(manille_mobile_get_state(game_from(handle), &s), env))
         return nullptr;
@@ -407,7 +407,7 @@ Java_com_manille_androidapp_NativeGame_nativeSnapshot(JNIEnv* env, jclass, jlong
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_manille_androidapp_NativeGame_nativeRestore(JNIEnv* env, jclass, jintArray snapshot) {
+Java_com_manille_jvm_NativeGame_nativeRestore(JNIEnv* env, jclass, jintArray snapshot) {
     const jsize n = snapshot ? env->GetArrayLength(snapshot) : 0;
     if (n != 14 + 8 + 64 + 8) {
         jclass error_class = env->FindClass("java/lang/IllegalArgumentException");
@@ -435,7 +435,7 @@ Java_com_manille_androidapp_NativeGame_nativeRestore(JNIEnv* env, jclass, jintAr
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_manille_androidapp_NativeGame_nativeTrickWinner(JNIEnv* env, jclass, jintArray cards, jint trump) {
+Java_com_manille_jvm_NativeGame_nativeTrickWinner(JNIEnv* env, jclass, jintArray cards, jint trump) {
     const jsize n = cards ? env->GetArrayLength(cards) : 0;
     int32_t c[4] = {-1, -1, -1, -1};
     if (n < 1 || n > 4) {

@@ -4,6 +4,8 @@ android/app/build/
 android/app/.cxx/
 android/build/
 android/local.properties
+android/.kotlin/
+android/desktop/build/
 android/gradle/gradle-daemon-jvm.properties
 .idea/
 *.iml

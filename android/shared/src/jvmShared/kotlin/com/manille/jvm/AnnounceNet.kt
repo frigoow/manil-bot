@@ -1,9 +1,8 @@
-package com.manille.androidapp
+package com.manille.jvm
 
 import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import android.content.Context
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
@@ -14,9 +13,9 @@ import java.nio.LongBuffer
  * from the deciding team's own perspective; `rel = (seat - dealer) % 4`
  * (1 or 3 for a meegaan, 0 or 2 for a terug).
  */
-class AnnounceNet(context: Context) : AnnounceModel {
+class AnnounceNet(model: File) : AnnounceModel {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session = OrtSessions.open(environment, installModel(context))
+    private val session = OrtSessions.open(environment, model)
 
     /** `[meegaan_pass, meegaan_call, terug_pass, terug_call]` match equities. */
     override fun equities(handMask: Long, declaration: Int, rel: Int, us: Int, them: Int): FloatArray {
@@ -71,6 +70,4 @@ class AnnounceNet(context: Context) : AnnounceModel {
 
     override fun close() = session.close()
 
-    private fun installModel(context: Context): File =
-        ModelFiles.install(context, ModelNames.ANNOUNCE, AndroidPlatform.MODELS_HINT)
 }

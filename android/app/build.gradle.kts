@@ -82,8 +82,5 @@ dependencies {
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    // 1.27.0: first tested release that honours mlas.disable_kleidiai for Gemm and
-    // GRU (see OrtSessions.kt). 1.28.0 - 1.32.0 crashed at startup under the
-    // emulator's arm64 translation, so test on a device before moving past it.
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
+    // ONNX Runtime (onnxruntime-android) comes in through :shared, with the nets
 }

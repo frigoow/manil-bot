@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(manille_android LANGUAGES CXX)
 
 add_library(manille_mobile SHARED
-    jni_bridge.cpp
+    ../../../../../cpp/jni/jni_bridge.cpp
     ../../../../../cpp/mobile/manille_mobile.cpp
     ../../../../../cpp/manille_game.cpp
     ../../../../../cpp/encoding.cpp

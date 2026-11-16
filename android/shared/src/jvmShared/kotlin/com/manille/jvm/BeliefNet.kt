@@ -1,10 +1,9 @@
-package com.manille.androidapp
+package com.manille.jvm
 
 import com.manille.shared.*
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
-import android.content.Context
 import java.io.File
 import java.nio.FloatBuffer
 
@@ -14,14 +13,9 @@ import java.nio.FloatBuffer
  * the prior-residual softmax already applied. One file per declaration
  * kind: trump deals and no-trump (mull) deals.
  */
-class BeliefNet(context: Context, private val modelFile: String) : BeliefModel {
+class BeliefNet(model: File) : BeliefModel {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session: OrtSession
-
-    init {
-        val model = installModel(context)
-        session = OrtSessions.open(environment, model)
-    }
+    private val session: OrtSession = OrtSessions.open(environment, model)
 
     override fun probabilities(observation: FloatArray): FloatArray {
         require(observation.size == OBS_DIM) { "Unexpected observation length ${observation.size}." }
@@ -43,8 +37,6 @@ class BeliefNet(context: Context, private val modelFile: String) : BeliefModel {
         session.close()
     }
 
-    private fun installModel(context: Context): File =
-        ModelFiles.install(context, modelFile, AndroidPlatform.MODELS_HINT)
 
     companion object {
         private const val OBS_DIM = 2492

@@ -1,8 +1,9 @@
 name: Release
 
 # Push a tag vX.Y.Z (matching versionName in android/app/build.gradle.kts) and
-# this builds the signed APK and publishes it as a GitHub release. The
-# networks come from the models release (MODELS_TAG); they are not in git.
+# this builds the signed APK and publishes it as a GitHub release, then the
+# desktop packages for Windows, macOS and Linux (desktop.yml) are attached to
+# it. The networks come from the models release (MODELS_TAG); they are not in git.
 on:
   push:
     tags: ['v*']
@@ -77,3 +78,9 @@ jobs:
           else
             gh release create "$TAG" Manille.apk --title "Manille $TAG" --generate-notes --latest
           fi
+
+  desktop:
+    needs: apk
+    uses: ./.github/workflows/desktop.yml
+    with:
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
