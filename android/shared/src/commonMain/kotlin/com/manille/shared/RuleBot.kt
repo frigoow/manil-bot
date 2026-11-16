@@ -20,10 +20,31 @@ import kotlin.time.TimeSource
  * choose() blocks for the play-out: call it off the UI thread, on an
  * [Engine.copy].
  */
-class RuleBot(platform: Platform, private val trumpQ: QModel, private val announce: AnnounceModel?) : AutoCloseable {
+class RuleBot(private val platform: Platform, private val trumpQ: QModel, private val announce: AnnounceModel?) : AutoCloseable {
     private val beliefTrump = platform.beliefModel(ModelNames.BELIEF_TRUMP)
-    private val beliefMull = platform.beliefModel(ModelNames.BELIEF_MULL)
-    private val mullQ = platform.qModel(ModelNames.Q_MULL)
+
+    /**
+     * The no-trump (mull) belief and Q nets: ~200 MB that only a mull deal
+     * uses, so they load when one needs them ([prepareMull] as soon as a
+     * mull is declared) and go again at the next suit deal ([releaseMull]).
+     * Touched only on the worker thread, like everything that runs the nets.
+     */
+    private var mullNets: Pair<BeliefModel, QModel>? = null
+
+    private fun mull(): Pair<BeliefModel, QModel> = mullNets ?: run {
+        val belief = platform.beliefModel(ModelNames.BELIEF_MULL)
+        val q = try { platform.qModel(ModelNames.Q_MULL) } catch (e: Throwable) { belief.close(); throw e }
+        (belief to q).also { mullNets = it }
+    }
+
+    /** Load the mull nets now (a mull was declared). On the worker. */
+    fun prepareMull() { runCatching { mull() } }
+
+    /** Free the mull nets (a suit deal). On the worker. */
+    fun releaseMull() {
+        mullNets?.let { (belief, q) -> belief.close(); q.close() }
+        mullNets = null
+    }
     /**
      * The fast learned play-out (cpp/fast_policy.h): every simulated seat
      * follows a small net for the first [netPlies] plies of the play-out, then
@@ -91,8 +112,9 @@ class RuleBot(platform: Platform, private val trumpQ: QModel, private val announ
         var t = TimeSource.Monotonic.markNow()
         fun lap(i: Int) { lastTimings[i] = t.elapsedNow().inWholeMilliseconds; t = TimeSource.Monotonic.markNow() }
         val worlds = game.sampleWorlds(calls.trumpRuleKnown, N_WORLDS); lap(0)
-        val belief = (if (mull) beliefMull else beliefTrump).probabilities(game.observation(me)); lap(1)
-        val scores = (if (mull) mullQ else trumpQ).scoreCards(
+        val nets = if (mull) mull() else null
+        val belief = (nets?.first ?: beliefTrump).probabilities(game.observation(me)); lap(1)
+        val scores = (nets?.second ?: trumpQ).scoreCards(
             game.gruRaw(me), game.gruLength(me), game.gruGlobal(me), game.actionFeatures(me), legal)
         val q = FloatArray(32)
         for (s in scores) q[s.card] = s.value
@@ -154,7 +176,7 @@ class RuleBot(platform: Platform, private val trumpQ: QModel, private val announ
     }
 
     override fun close() {
-        beliefTrump.close(); beliefMull.close(); mullQ.close()
+        beliefTrump.close(); releaseMull()
         fastNets.values.forEach { it.close() }
     }
 

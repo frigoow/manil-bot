@@ -9,6 +9,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.manille.jvm.JvmPlatform
 import com.manille.jvm.NativeLibrary
+import com.manille.jvm.OrtSessions
 import com.manille.shared.AppConfig
 import com.manille.shared.ManilleRoot
 import org.jetbrains.skia.Image
@@ -22,6 +23,8 @@ fun main() {
     val resources = appResources()
     val library = File(resources, "native/" + System.mapLibraryName("manille_mobile"))
     NativeLibrary.load = { System.load(library.absolutePath) }
+    // memory over a few ms per bot move (see OrtSessions)
+    OrtSessions.prepacking = false
     System.getProperty("manille.botNames")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
         ?.takeIf { it.size >= 3 }?.let { AppConfig.botNames = it }
     System.getProperty("manille.cafeThemeName")?.takeIf { it.isNotBlank() }?.let { AppConfig.cafeThemeName = it }
