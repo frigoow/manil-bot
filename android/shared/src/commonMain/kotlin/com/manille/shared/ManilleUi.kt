@@ -15,6 +15,8 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
@@ -543,7 +545,9 @@ private fun GameScene(controller: GameController) {
         if (landscape) {
             val panelW = 196.dp
             val leftW = maxWidth - panelW
-            val handW = minOf(76.dp, maxHeight * .27f / 1.45f, (leftW - 24.dp) / 5.7f)
+            // a phone on its side is held to its height; a tablet or a desktop
+            // window gets bigger cards, up to 120 dp, so they suit the table
+            val handW = minOf(120.dp, maxHeight * .27f / 1.45f, (leftW - 24.dp) / 5.7f)
             val tableH = maxHeight - handW * 1.45f - 34.dp
             val trickW = minOf(handW * .86f, (tableH - 64.dp) / 2f / 1.45f)
             val sizes = Sizes(handW, trickW, trickW * .55f, compactSeats = true)
@@ -1249,14 +1253,16 @@ private fun TrickCard(controller: GameController, state: BoardState, player: Int
     if (card < 0) return
     key(card) {
         val animate = controller.animations
-        // 0 -> 1 as the card glides in from its player's seat
-        val enter = remember { Animatable(if (animate) 0f else 1f) }
-        LaunchedEffect(Unit) { enter.animateTo(1f, tween(300, easing = FastOutSlowInEasing)) }
-        val collectTo = controller.trickCollectTo
-        val collect by animateFloatAsState(if (collectTo >= 0 && animate) 1f else 0f,
-            tween(350, easing = FastOutSlowInEasing), label = "collect")
         val from = seatAt.getValue(player)
+        val collectTo = controller.trickCollectTo
         val to = seatAt[collectTo] ?: home
+        // 0 -> 1 as the card glides in from its player's seat; a long way
+        // (a big window's table) takes longer, so the speed stays calm
+        val enter = remember { Animatable(if (animate) 0f else 1f) }
+        LaunchedEffect(Unit) { enter.animateTo(1f, tween(glideMs(300, from, home, max = 550), easing = FastOutSlowInEasing)) }
+        // the sweep must end within GameController's COLLECT_MS (520)
+        val collect by animateFloatAsState(if (collectTo >= 0 && animate) 1f else 0f,
+            tween(glideMs(350, home, to, max = 500), easing = FastOutSlowInEasing), label = "collect")
         val spin = if (player == 1 || player == 2) -1f else 1f
         CardFace(card, controller.fourColor, modifier.graphicsLayer {
             val p = enter.value
@@ -1268,6 +1274,17 @@ private fun TrickCard(controller: GameController, state: BoardState, player: Int
             alpha = (.4f + .6f * p) * (1f - .7f * collect)
         }, sizes.trickW, sizes.trickH)
     }
+}
+
+/**
+ * How long a card takes from [a] to [b]: [base] ms over a phone table's
+ * distances (up to ~180 dp), then growing with the square root of the
+ * distance, up to [max] ms on a large window, so a card never races across
+ * a big table.
+ */
+private fun glideMs(base: Int, a: DpOffset, b: DpOffset, max: Int): Int {
+    val d = kotlin.math.hypot((a.x - b.x).value, (a.y - b.y).value)
+    return (base * kotlin.math.sqrt(maxOf(1f, d / 180f))).roundToInt().coerceAtMost(max)
 }
 
 @Composable
@@ -1286,9 +1303,13 @@ private fun HumanHand(controller: GameController, sizes: Sizes, available: Dp, m
     val radius = h.value * 1.6f
     val pulse = rememberInfiniteTransition(label = "hint")
     val beat by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "beat")
+    // the cards slide to their new places (a card played, one turning
+    // playable) rather than jump; read in the layout and draw phases only
+    val slide = if (controller.animations) tween<Dp>(240, easing = FastOutSlowInEasing) else snap()
+    val turn = if (controller.animations) tween<Float>(240, easing = FastOutSlowInEasing) else snap()
     Box(Modifier.fillMaxWidth().height(h + 30.dp)) {
         var x = -total / 2 + w / 2
-        cards.forEachIndexed { index, card ->
+        cards.forEachIndexed { index, card -> key(card) {
             if (index > 0 && cards[index - 1] / 8 != card / 8) x += gap
             val playing = controller.phase == TablePhase.PLAYING
             val legal = playing && !controller.trickPaused && card in controller.legalCards
@@ -1296,9 +1317,13 @@ private fun HumanHand(controller: GameController, sizes: Sizes, available: Dp, m
             val drop = (radius * (1 - cos(angle.toDouble() * kotlin.math.PI / 180))).toFloat().dp
             val best = controller.hintPick == card
             val lift = (if (legal) (-14).dp else 0.dp) + (if (best) (-16).dp else 0.dp)
+            val ax = animateDpAsState(x, slide, label = "x")
+            val ay = animateDpAsState(lift + drop - 12.dp, slide, label = "y")
+            val aAngle = animateFloatAsState(angle, turn, label = "angle")
             Column(
-                Modifier.align(Alignment.BottomCenter).offset(x = x, y = lift + drop - 12.dp)
-                    .graphicsLayer { rotationZ = angle; transformOrigin = TransformOrigin(0.5f, 1f) }
+                Modifier.align(Alignment.BottomCenter)
+                    .offset { androidx.compose.ui.unit.IntOffset(ax.value.roundToPx(), ay.value.roundToPx()) }
+                    .graphicsLayer { rotationZ = aAngle.value; transformOrigin = TransformOrigin(0.5f, 1f) }
                     .then(if (best) Modifier.zIndex(1f) else Modifier),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -1318,7 +1343,7 @@ private fun HumanHand(controller: GameController, sizes: Sizes, available: Dp, m
                     onClick = if (legal) ({ controller.playHuman(card) }) else null)
             }
             x += step
-        }
+        } }
     }
 }
 
