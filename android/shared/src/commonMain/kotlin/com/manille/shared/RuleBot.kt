@@ -73,7 +73,7 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
     private val fastNetsSuit: Map<Pair<Int, Boolean>, FastNet> = loadFastNets(ModelNames.FAST_NET_SUIT)
 
     /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
-    @Volatile var netPlies: Int = 0
+    @Volatile var netPlies: Int = WHOLE_DEAL
     /** The net finishes the trick its plies end in ([TRICK_END]). */
     @Volatile var netTrickEnd: Boolean = TRICK_END
 
