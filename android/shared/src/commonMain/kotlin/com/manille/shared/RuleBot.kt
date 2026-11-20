@@ -111,7 +111,9 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
         val mull = state.trumpSuit < 0
         var t = TimeSource.Monotonic.markNow()
         fun lap(i: Int) { lastTimings[i] = t.elapsedNow().inWholeMilliseconds; t = TimeSource.Monotonic.markNow() }
-        val worlds = game.sampleWorlds(calls.trumpRuleKnown, N_WORLDS); lap(0)
+        val fastNet = fastNets[netPlies to netTrickEnd]
+        val nWorlds = if (fastNet != null) N_WORLDS_NET else N_WORLDS
+        val worlds = game.sampleWorlds(calls.trumpRuleKnown, nWorlds); lap(0)
         val nets = if (mull) mull() else null
         val belief = (nets?.first ?: beliefTrump).probabilities(game.observation(me)); lap(1)
         val scores = (nets?.second ?: trumpQ).scoreCards(
@@ -120,7 +122,7 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
         for (s in scores) q[s.card] = s.value
         lap(2)
         val extra = if (state.doubled) doubleWeights(worlds, state, calls) else null; lap(3)
-        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNets[netPlies to netTrickEnd]); lap(4)
+        val card = game.ruleChooseWorlds(worlds, belief, q, extra, values, fastNet); lap(4)
         return card
     }
 
@@ -138,12 +140,36 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
 
         fun dealt(seat: Int) = LongArray(n) { worlds.dealt[4 * it + seat] }
 
+        // Deduplicate identical dealt hands per seat before calling the
+        // announce ONNX net (late in a deal or after enumeration, many worlds
+        // share the same seat hand; mathematically identical, ~2-3x faster).
+        fun equitiesDedup(hands: LongArray, rel: Int, us: Int, them: Int): Array<FloatArray> {
+            val indexByHand = HashMap<Long, Int>(hands.size)
+            val unique = LongArray(hands.size)
+            val map = IntArray(hands.size)
+            var u = 0
+            for (i in hands.indices) {
+                val h = hands[i]
+                val existing = indexByHand[h]
+                if (existing != null) {
+                    map[i] = existing
+                } else {
+                    indexByHand[h] = u
+                    unique[u] = h
+                    map[i] = u
+                    u++
+                }
+            }
+            val uniqEv = net.equitiesBatch(unique.copyOf(u), decl, rel, us, them)
+            return Array(hands.size) { uniqEv[map[it]] }
+        }
+
         // meegaan: defenders asked from the dealer's left, first yes takes it;
         // scores from the defenders' own view
         val pMee = Array(2) { DoubleArray(n) }
         val qMee = Array(2) { DoubleArray(n) }
         for ((i, off) in intArrayOf(1, 3).withIndex()) {
-            val ev = net.equitiesBatch(dealt((d + off) % 4), decl, off, calls.declThem, calls.declUs)
+            val ev = equitiesDedup(dealt((d + off) % 4), off, calls.declThem, calls.declUs)
             for (w in 0 until n) {
                 val delta = (ev[w][1] - ev[w][0]).toDouble() / TEMP
                 pMee[i][w] = logSigmoid(delta)
@@ -158,7 +184,7 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
         val pTer = Array(2) { DoubleArray(n) }
         val qTer = Array(2) { DoubleArray(n) }
         for ((i, off) in intArrayOf(0, 2).withIndex()) {
-            val ev = net.equitiesBatch(dealt((d + off) % 4), decl, off, calls.declUs, calls.declThem)
+            val ev = equitiesDedup(dealt((d + off) % 4), off, calls.declUs, calls.declThem)
             for (w in 0 until n) {
                 val delta = (ev[w][3] - ev[w][2]).toDouble() / TEMP
                 pTer[i][w] = logSigmoid(delta)
@@ -182,6 +208,8 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
 
     companion object {
         const val N_WORLDS = 400
+        /** Sampled worlds when the fast play-out net is enabled (SIR caps play-out at 768). */
+        const val N_WORLDS_NET = 800
         /**
          * Hand the play-out over to the rule policy on a trick boundary: the
          * net finishes the trick its plies end in, so "1 trick" = 4 plies

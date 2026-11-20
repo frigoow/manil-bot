@@ -132,6 +132,22 @@ struct Params {
     int playout_net_plies = 0;
     // the net also finishes the trick in progress when its plies run out
     bool playout_net_trick_end = false;
+    // weight-first deduplication + deterministic stratified resampling to
+    // <= playout_worlds unique worlds before running the play-out
+    bool playout_sir = false;
+    // honest soft action log-likelihood from the fast policy net on suit deals
+    // (replaces rule world_mismatches when > 0, net is provided, and trump >= 0)
+    double lik_net_partner_w = 0.0;
+    double lik_net_opp_w = 0.0;
+    double lik_net_tau = 1.0;
+    // exact double-dummy alpha-beta solver on mull (no-trump) deals when hand
+    // size <= mull_endgame_ab_cards (0 = off); < 0 falls back to normal qw/z
+    int mull_endgame_ab_cards = 0;
+    double mull_endgame_q_w = -1.0;
+    double mull_endgame_z = -1.0;
+    // paired-test z on suit deals when the fast policy net plays the
+    // continuation (< 0 = use playout_z)
+    double suit_net_z = -1.0;
 };
 
 struct Decision {

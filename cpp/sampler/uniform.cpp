@@ -92,14 +92,18 @@ PublicState PublicState::fromGame(const ManilleGame& game, int observer) {
 }
 
 Deal UniformDealSampler::sampleDeal(const PublicState& public_state) const {
-    SamplingProblem problem = buildProblem(public_state);
+    auto deals = sampleDeals(public_state, 1, false);
+    return deals[0];
+}
 
-    Deal deal;
-    deal.hands.fill(0);
-    deal.hands[public_state.observer] = public_state.observer_hand;
-    const int partner = (public_state.observer + 2) % 4;
-    if (public_state.partner_hand != 0)
-        deal.hands[partner] = public_state.partner_hand;
+std::vector<Deal> UniformDealSampler::sampleDeals(
+    const PublicState& public_state,
+    int n,
+    bool enumerate_if_small
+) const {
+    if (n <= 0)
+        return {};
+    SamplingProblem problem = buildProblem(public_state);
 
     std::unordered_map<uint64_t, uint64_t> memo;
     memo.reserve(problem.domains.size() * 64);
@@ -112,9 +116,32 @@ Deal UniformDealSampler::sampleDeal(const PublicState& public_state) const {
         );
     }
 
-    remaining = problem.remaining;
-    sampleAssignments(problem, 0, remaining, memo, deal.hands);
-    return deal;
+    const int partner = (public_state.observer + 2) % 4;
+    if (enumerate_if_small && completion_count <= static_cast<uint64_t>(n)) {
+        std::vector<Deal> out;
+        out.reserve(static_cast<size_t>(completion_count));
+        std::array<int64_t, 4> hands{0, 0, 0, 0};
+        hands[public_state.observer] = public_state.observer_hand;
+        if (public_state.partner_hand != 0)
+            hands[partner] = public_state.partner_hand;
+        remaining = problem.remaining;
+        enumerateAssignments(problem, 0, remaining, memo, hands, out);
+        return out;
+    }
+
+    std::vector<Deal> out;
+    out.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        Deal deal;
+        deal.hands.fill(0);
+        deal.hands[public_state.observer] = public_state.observer_hand;
+        if (public_state.partner_hand != 0)
+            deal.hands[partner] = public_state.partner_hand;
+        remaining = problem.remaining;
+        sampleAssignments(problem, 0, remaining, memo, deal.hands);
+        out.push_back(deal);
+    }
+    return out;
 }
 
 std::vector<Deal> UniformDealSampler::enumerateDeals(

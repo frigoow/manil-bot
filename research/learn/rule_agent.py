@@ -205,6 +205,16 @@ DEFAULTS = dict(
     last_ruff_low=True,    # last to play with the highest trump left in the game: win
                            # with the lowest trump that also wins instead (user request:
                            # the master keeps its trick for later)
+    playout_sir=False,     # weight-first deduplication + deterministic stratified
+                           # resampling to <= playout_worlds unique worlds
+    lik_net_partner_w=0.0, # honest fast_policy action log-likelihood weight for partner
+                           # on suit deals (replaces world_mismatches when > 0)
+    lik_net_opp_w=0.0,     # ... and for opponents on suit deals
+    lik_net_tau=1.0,       # temperature on fast_policy logits for history likelihood
+    mull_endgame_ab_cards=0,  # exact double-dummy alpha-beta on mull at <= this hand size
+    mull_endgame_q_w=-1.0, # root Q weight when mull AB runs (< 0 = normal qw)
+    mull_endgame_z=-1.0,   # z threshold when mull AB runs (< 0 = playout_z)
+    suit_net_z=-1.0,       # z threshold on suit deals with fast_policy (< 0 = playout_z)
     native=False,          # run the deploy path in C++ (cpp/rule_agent.cpp) when the
                            # params allow it (native_supported); nets stay in Python
 )
@@ -231,7 +241,10 @@ NATIVE_FIELDS = (
     'endgame_master_trump cash_threshold lead_pts_w low_pull_min low_pull_bonus '
     'guard_lead_bonus bare_honour_pen partner_top_w opp_ruff_pen partner_ruff_bonus '
     'singleton_bonus length_w playout playout_worlds playout_max_cards playout_margin '
-    'ruff_convention through_fix last_ruff_low playout_z playout_nt_rules playout_tr_rules lik_belief_w lik_partner_eps lik_opp_eps root_q_w').split()
+    'ruff_convention through_fix last_ruff_low playout_z playout_nt_rules playout_tr_rules '
+    'lik_belief_w lik_partner_eps lik_opp_eps root_q_w '
+    'playout_sir lik_net_partner_w lik_net_opp_w lik_net_tau '
+    'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z suit_net_z').split()
 
 
 class Knowledge:

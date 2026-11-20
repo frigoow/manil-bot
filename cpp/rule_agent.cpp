@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <tuple>
 
 // Mirrors learn/rule_agent.py. Every loop runs in the Python's iteration
@@ -343,7 +344,8 @@ void locate(Knowledge& k, const std::vector<rollout::World>& worlds, int me, int
                 idx.push_back(static_cast<int>(wi));
             }
         }
-        if (static_cast<int>(W.size()) >= min_worlds) {
+        if (static_cast<int>(W.size()) >= min_worlds
+                || (!W.empty() && W.size() == worlds.size())) {
             k.W = std::move(W);
             k.Widx = std::move(idx);
             k.haveW = true;
@@ -1125,12 +1127,15 @@ std::pair<int, std::string> Agent::lead_low() const {
 }
 
 // rule_agent.py::belief_world_weights (dmc_belief_log_weights + per-seat
-// rule likelihood), worlds by absolute seat.
+// rule likelihood or honest fast-policy soft action likelihood on suit deals),
+// worlds by absolute seat.
 std::vector<double> worldWeights(int trump, int dealer, int me, int64_t seen,
                                  const std::vector<rollout::World>& worlds,
                                  const rollout::History& history,
                                  const float* belief, const Params& P,
-                                 const double* extra, const std::vector<int>& widx) {
+                                 const double* extra, const std::vector<int>& widx,
+                                 const std::vector<int>* mults = nullptr,
+                                 const fastpolicy::Net* net = nullptr) {
     const size_t n = worlds.size();
     std::vector<double> logw(n, 0.0);
     if (belief) {
@@ -1152,19 +1157,33 @@ std::vector<double> worldWeights(int trump, int dealer, int me, int64_t seen,
         }
     }
     if (!history.empty()) {
-        rollout::Options opt;
-        opt.honest = 0;
-        opt.agent_like = true;
-        opt.nt_rules = 0;
-        auto mm = rollout::world_mismatches(trump, dealer, me, worlds, history, opt);
-        const int partner = (me + 2) % 4, o1 = (me + 1) % 4, o3 = (me + 3) % 4;
-        const double lp = std::log(P.lik_partner_eps), lo = std::log(P.lik_opp_eps);
-        for (size_t i = 0; i < n; ++i)
-            logw[i] = logw[i] + mm[i][partner] * lp + (mm[i][o1] + mm[i][o3]) * lo;
+        const bool use_net_lik = (trump >= 0) && net && !net->empty()
+            && (P.lik_net_partner_w > 0.0 || P.lik_net_opp_w > 0.0);
+        if (use_net_lik) {
+            auto fpl = fastpolicy::history_log_likelihood(
+                *net, trump, dealer, me, worlds, history,
+                P.lik_net_tau, P.lik_net_partner_w, P.lik_net_opp_w);
+            for (size_t i = 0; i < n; ++i)
+                logw[i] += fpl[i];
+        } else {
+            rollout::Options opt;
+            opt.honest = 0;
+            opt.agent_like = true;
+            opt.nt_rules = 0;
+            auto mm = rollout::world_mismatches(trump, dealer, me, worlds, history, opt);
+            const int partner = (me + 2) % 4, o1 = (me + 1) % 4, o3 = (me + 3) % 4;
+            const double lp = std::log(P.lik_partner_eps), lo = std::log(P.lik_opp_eps);
+            for (size_t i = 0; i < n; ++i)
+                logw[i] = logw[i] + mm[i][partner] * lp + (mm[i][o1] + mm[i][o3]) * lo;
+        }
     }
     if (extra)
         for (size_t i = 0; i < n; ++i)
             logw[i] = logw[i] + extra[widx[i]];
+    if (mults)
+        for (size_t i = 0; i < n; ++i)
+            if ((*mults)[i] > 1)
+                logw[i] += std::log(double((*mults)[i]));
     double mx = logw.empty() ? 0.0 : *std::max_element(logw.begin(), logw.end());
     std::vector<double> w(n);
     for (size_t i = 0; i < n; ++i)
@@ -1196,32 +1215,45 @@ Decision choose(const ManilleGame& game, int me, int dealer,
 
     if (P.playout && k.haveW && k.legal.size() > 1
             && static_cast<int>(k.hand.size()) <= P.playout_max_cards) {
-        const size_t n = std::min(k.W.size(), static_cast<size_t>(P.playout_worlds));
-        std::vector<rollout::World> wabs(n);
-        for (size_t i = 0; i < n; ++i)
-            for (int s = 0; s < 4; ++s)
-                wabs[i][s] = k.W[i][((s - me) % 4 + 4) % 4];
-        rollout::Options opt;
-        opt.honest = 0;
-        opt.agent_like = true;
-        opt.nt_rules = P.playout_nt_rules;
-        opt.tr_rules = P.playout_tr_rules | (P.ruff_convention ? 32 : 0);
-        const bool hybrid = net && !net->empty() && P.playout_net_plies > 0;
-        rollout::NetChoose net_choose = [net](const ManilleGame& g, int seat) {
-            return fastpolicy::choose(*net, g, seat);
-        };
-        auto per = rollout::evaluate_candidates(k.trump, dealer, me, k.legal, wabs, history, opt,
-                                                hybrid ? &net_choose : nullptr,
-                                                P.playout_net_plies, P.playout_net_trick_end);
-        if (!hybrid && net && !net->empty() && P.playout_net_mix > 0) {
-            // the learned continuation: every seat of every world follows
-            // the net instead of (or mixed with) the rule policy
-            auto pn = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, k.legal,
-                                                      wabs, history);
-            const double nm = P.playout_net_mix;
-            for (size_t ci = 0; ci < per.size(); ++ci)
-                for (size_t i = 0; i < per[ci].size(); ++i)
-                    per[ci][i] = (1 - nm) * per[ci][i] + nm * pn[ci][i];
+        const bool mull = k.trump < 0;
+        const bool use_ab = mull && P.mull_endgame_ab_cards > 0
+            && static_cast<int>(k.hand.size()) <= P.mull_endgame_ab_cards;
+        const bool use_sir = P.playout_sir;
+        const size_t raw_n = use_sir
+            ? k.W.size()
+            : std::min(k.W.size(), static_cast<size_t>(P.playout_worlds));
+
+        std::vector<rollout::World> wabs;
+        std::vector<int> widx;
+        std::vector<int> mults;
+        if (use_sir || use_ab) {
+            // Deduplicate worlds preserving exact multiplicity and extra index
+            std::map<rollout::World, size_t> wmap;
+            wabs.reserve(raw_n);
+            widx.reserve(raw_n);
+            mults.reserve(raw_n);
+            for (size_t i = 0; i < raw_n; ++i) {
+                rollout::World abs_w{};
+                for (int s = 0; s < 4; ++s)
+                    abs_w[s] = k.W[i][((s - me) % 4 + 4) % 4];
+                auto it = wmap.find(abs_w);
+                if (it == wmap.end()) {
+                    wmap.emplace(abs_w, wabs.size());
+                    wabs.push_back(abs_w);
+                    widx.push_back(k.Widx[i]);
+                    mults.push_back(1);
+                } else {
+                    mults[it->second] += 1;
+                }
+            }
+        } else {
+            wabs.resize(raw_n);
+            widx.resize(raw_n);
+            for (size_t i = 0; i < raw_n; ++i) {
+                for (int s = 0; s < 4; ++s)
+                    wabs[i][s] = k.W[i][((s - me) % 4 + 4) % 4];
+                widx[i] = k.Widx[i];
+            }
         }
 
         int64_t seen = 0;
@@ -1230,10 +1262,83 @@ Decision choose(const ManilleGame& game, int me, int dealer,
         for (auto& sc : history)
             seen |= bit(sc.second);
         std::vector<double> wts = worldWeights(k.trump, dealer, me, seen, wabs, history,
-                                               belief, P, extra, k.Widx);
+                                               belief, P, extra, widx,
+                                               mults.empty() ? nullptr : &mults, net);
+        double tot = 0.0;
+        for (double w : wts)
+            tot += w;
+        for (double& w : wts)
+            w /= tot;
 
-        const bool mull = k.trump < 0;
-        const double qw = mull && P.mull_root_q_w >= 0 ? P.mull_root_q_w : P.root_q_w;
+        double n_eff_override = 0.0;
+        if (use_sir && wabs.size() > 1) {
+            double ww = 0.0;
+            for (size_t i = 0; i < wabs.size(); ++i) {
+                const double w_single = wts[i] / double(mults[i]);
+                ww += double(mults[i]) * w_single * w_single;
+            }
+            const int K = std::min<int>(P.playout_worlds, static_cast<int>(raw_n));
+            n_eff_override = std::min(1.0 / ww, double(K));
+            std::vector<int> counts(wabs.size(), 0);
+            double cdf = 0.0;
+            size_t idx = 0;
+            for (int j = 0; j < K; ++j) {
+                const double u = (j + 0.5) / double(K);
+                while (idx + 1 < wabs.size() && cdf + wts[idx] < u) {
+                    cdf += wts[idx];
+                    ++idx;
+                }
+                counts[idx] += 1;
+            }
+            std::vector<rollout::World> nwabs;
+            std::vector<double> nwts;
+            nwabs.reserve(wabs.size());
+            nwts.reserve(wabs.size());
+            for (size_t i = 0; i < wabs.size(); ++i) {
+                if (counts[i] > 0) {
+                    nwabs.push_back(wabs[i]);
+                    nwts.push_back(double(counts[i]) / double(K));
+                }
+            }
+            wabs.swap(nwabs);
+            wts.swap(nwts);
+            mults.clear();
+        }
+
+        const size_t n = wabs.size();
+        const bool has_net = net && !net->empty();
+        const bool net_whole = has_net && ((P.playout_net_plies >= 32)
+                                           || (P.playout_net_plies == 0 && P.playout_net_mix >= 1.0));
+        const bool hybrid = has_net && P.playout_net_plies > 0 && !net_whole;
+        std::vector<std::vector<double>> per;
+        if (use_ab) {
+            per = rollout::evaluate_endgame(game, me, k.legal, wabs);
+        } else if (net_whole) {
+            per = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, k.legal, wabs, history);
+        } else {
+            rollout::Options opt;
+            opt.honest = 0;
+            opt.agent_like = true;
+            opt.nt_rules = P.playout_nt_rules;
+            opt.tr_rules = P.playout_tr_rules | (P.ruff_convention ? 32 : 0);
+            rollout::NetChoose net_choose = [net](const ManilleGame& g, int seat) {
+                return fastpolicy::choose(*net, g, seat);
+            };
+            per = rollout::evaluate_candidates(k.trump, dealer, me, k.legal, wabs, history, opt,
+                                               hybrid ? &net_choose : nullptr,
+                                               P.playout_net_plies, P.playout_net_trick_end);
+            if (!hybrid && has_net && P.playout_net_mix > 0) {
+                auto pn = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, k.legal,
+                                                          wabs, history);
+                const double nm = P.playout_net_mix;
+                for (size_t ci = 0; ci < per.size(); ++ci)
+                    for (size_t i = 0; i < per[ci].size(); ++i)
+                        per[ci][i] = (1 - nm) * per[ci][i] + nm * pn[ci][i];
+            }
+        }
+
+        const double base_qw = mull && P.mull_root_q_w >= 0 ? P.mull_root_q_w : P.root_q_w;
+        const double qw = (use_ab && P.mull_endgame_q_w >= 0) ? P.mull_endgame_q_w : base_qw;
         if (qw > 0 && q) {
             for (size_t ci = 0; ci < k.legal.size(); ++ci) {
                 const double qv = 30.0 * double(q[k.legal[ci]]) + 30.0;
@@ -1241,11 +1346,6 @@ Decision choose(const ManilleGame& game, int me, int dealer,
                     v = (1 - qw) * v + qw * qv;
             }
         }
-        double tot = 0.0;
-        for (double w : wts)
-            tot += w;
-        for (double& w : wts)
-            w /= tot;
         std::vector<double> vals(k.legal.size(), 0.0);
         for (size_t ci = 0; ci < k.legal.size(); ++ci) {
             double s = 0.0;
@@ -1291,13 +1391,24 @@ Decision choose(const ManilleGame& game, int me, int dealer,
                 have_bi = true;
             }
         }
+        const bool used_net_playout = has_net && (P.playout_net_plies > 0 || P.playout_net_mix > 0);
+        double z_eff = P.playout_z;
+        if (use_ab && P.mull_endgame_z >= 0)
+            z_eff = P.mull_endgame_z;
+        else if (!mull && used_net_playout && P.suit_net_z >= 0)
+            z_eff = P.suit_net_z;
         if (k.legal[bi] != choice) {
             double m = 0.0, ww = 0.0;
             for (size_t i = 0; i < n; ++i) {
                 m += wts[i] * (per[bi][i] - per[ci_choice][i]);
-                ww += wts[i] * wts[i];
+                if (!mults.empty()) {
+                    const double w_single = wts[i] / double(mults[i]);
+                    ww += double(mults[i]) * w_single * w_single;
+                } else {
+                    ww += wts[i] * wts[i];
+                }
             }
-            const double n_eff = 1.0 / ww;
+            const double n_eff = n_eff_override > 0.0 ? n_eff_override : (1.0 / ww);
             double var = 0.0;
             for (size_t i = 0; i < n; ++i) {
                 const double e = (per[bi][i] - per[ci_choice][i]) - m;
@@ -1305,7 +1416,7 @@ Decision choose(const ManilleGame& game, int me, int dealer,
             }
             const double se = std::sqrt(std::max(var, 1e-12) / n_eff);
             const double need = P.playout_margin + (suitOf(k.legal[bi]) == k.trump ? def_pen : 0.0);
-            if (m > need && (P.playout_z <= 0 || m > P.playout_z * se)) {
+            if (m > need && (z_eff <= 0 || m > z_eff * se)) {
                 d.why += "; play-out prefers " + cstr(k.legal[bi]) + " " + fmt("%.1f", vals[bi])
                     + " vs " + fmt("%.1f", vals[ci_choice]) + " (+" + fmt("%.2f", m)
                     + "\xc2\xb1" + fmt("%.2f", se) + ")";

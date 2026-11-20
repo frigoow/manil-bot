@@ -239,7 +239,7 @@ int main() {
             assert(manille_mobile_fastnet_set_plies(net, -1) != MANILLE_MOBILE_OK);
             assert(manille_mobile_fastnet_set_plies(nullptr, 4) != MANILLE_MOBILE_OK);
             assert(manille_mobile_fastnet_set_trick_end(nullptr, 1) != MANILLE_MOBILE_OK);
-            for (int variant : {4, 8, 104, 108, 0}) {
+            for (int variant : {4, 8, 104, 108, 32, 132, 0}) {
                 // 100+: the net finishes the trick its plies end in
                 const int plies = variant % 100;
                 assert(manille_mobile_fastnet_set_plies(net, plies) == MANILLE_MOBILE_OK);
@@ -252,6 +252,36 @@ int main() {
                 if (manille::popcount64(legal_mask) > 1)
                     for (int c = 0; c < 32; ++c)
                         assert(((legal_mask >> c) & 1) == !std::isnan(values[c]));
+            }
+            // Also verify full-deal play through the mobile API (including late-hand
+            // exact enumeration, mull exact alpha-beta endgame, and suit fast-net
+            // history likelihood).
+            for (int32_t trump : {1, -1}) {
+                ManilleMobileGame* fg = nullptr;
+                assert(manille_mobile_new_random_deal_with_trump(0, 77 + trump, trump, &fg)
+                       == MANILLE_MOBILE_OK);
+                assert(manille_mobile_start_playing(fg) == MANILLE_MOBILE_OK);
+                assert(manille_mobile_fastnet_set_plies(net, 32) == MANILLE_MOBILE_OK);
+                assert(manille_mobile_fastnet_set_trick_end(net, 1) == MANILLE_MOBILE_OK);
+                float belief[96];
+                for (float& b : belief) b = 1.0f / 3.0f;
+                float q[32]{};
+                std::vector<int64_t> cw(4 * 64), iw(4 * 64);
+                for (int ply = 0; ply < 32; ++ply) {
+                    int64_t lm = 0;
+                    assert(manille_mobile_legal_mask(fg, &lm) == MANILLE_MOBILE_OK);
+                    int32_t nw = 0, pick = -1;
+                    assert(manille_mobile_sample_worlds(fg, 0, 64, cw.data(), iw.data(), &nw)
+                           == MANILLE_MOBILE_OK && nw > 0 && nw <= 64);
+                    assert(manille_mobile_rule_choose_worlds_net(
+                               fg, cw.data(), nw, belief, q, nullptr, net, &pick, values)
+                           == MANILLE_MOBILE_OK);
+                    assert(pick >= 0 && ((lm >> pick) & 1));
+                    assert(manille_mobile_apply_card(fg, pick) == MANILLE_MOBILE_OK);
+                }
+                assert(manille_mobile_get_state(fg, &state) == MANILLE_MOBILE_OK);
+                assert(state.finished == 1 && state.pts0 + state.pts1 == 60);
+                manille_mobile_destroy(fg);
             }
             manille_mobile_fastnet_free(net);
             std::remove(path);

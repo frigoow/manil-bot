@@ -480,40 +480,19 @@ PYBIND11_MODULE(manille_ismcts, m) {
               // budget and return the worlds that did land: a draw accepted
               // by rejection sampling is exactly on-distribution however many
               // attempts it cost, so a short pool costs variance, not bias.
-              std::vector<std::array<int64_t, 4>> worlds;
-              worlds.reserve(static_cast<size_t>(n));
-              const int max_draws = allow_short ? 2 * n : n;
-              for (int draw = 0;
-                   draw < max_draws && static_cast<int>(worlds.size()) < n;
-                   ++draw) {
-                  ManilleGame::Clone clone;
-                  try {
-                      clone = game.cloneAndRandomise(
-                          static_cast<unsigned int>(observer));
-                  } catch (const sampler::RejectionBudgetExhausted&) {
-                      if (!allow_short)
-                          throw;
-                      continue;
-                  }
-                  auto* det = dynamic_cast<ManilleGame*>(clone.get());
-                  if (det == nullptr)
-                      throw std::runtime_error(
-                          "Determinization did not return ManilleGame.");
-                  std::array<int64_t, 4> world{};
-                  for (int p = 0; p < 4; ++p)
-                      world[p] = det->handMask(p);
-                  worlds.push_back(world);
-              }
-              if (worlds.empty())
+              static const sampler::TrumpConstrainedDealSampler s_sampler;
+              const auto public_state = sampler::PublicState::fromGame(game, observer);
+              const auto deals = s_sampler.sampleDeals(public_state, n, allow_short);
+              if (deals.empty())
                   throw sampler::RejectionBudgetExhausted(
                       "TrumpConstrainedDealSampler: exhausted rejection "
                       "budget without a trump-consistent deal.");
               py::array_t<int64_t> out(
-                  std::vector<ssize_t>{static_cast<ssize_t>(worlds.size()), 4});
+                  std::vector<ssize_t>{static_cast<ssize_t>(deals.size()), 4});
               auto out_mut = out.mutable_unchecked<2>();
-              for (ssize_t k = 0; k < static_cast<ssize_t>(worlds.size()); ++k)
+              for (ssize_t k = 0; k < static_cast<ssize_t>(deals.size()); ++k)
                   for (int p = 0; p < 4; ++p)
-                      out_mut(k, p) = worlds[static_cast<size_t>(k)][p];
+                      out_mut(k, p) = deals[static_cast<size_t>(k)].hands[p];
               return out;
           },
           py::arg("hands"),
@@ -1384,7 +1363,15 @@ PYBIND11_MODULE(manille_ismcts, m) {
         .def_readwrite("mull_root_q_w", &rule::Params::mull_root_q_w)
         .def_readwrite("playout_net_mix", &rule::Params::playout_net_mix)
         .def_readwrite("playout_net_plies", &rule::Params::playout_net_plies)
-        .def_readwrite("playout_net_trick_end", &rule::Params::playout_net_trick_end);
+        .def_readwrite("playout_net_trick_end", &rule::Params::playout_net_trick_end)
+        .def_readwrite("playout_sir", &rule::Params::playout_sir)
+        .def_readwrite("lik_net_partner_w", &rule::Params::lik_net_partner_w)
+        .def_readwrite("lik_net_opp_w", &rule::Params::lik_net_opp_w)
+        .def_readwrite("lik_net_tau", &rule::Params::lik_net_tau)
+        .def_readwrite("mull_endgame_ab_cards", &rule::Params::mull_endgame_ab_cards)
+        .def_readwrite("mull_endgame_q_w", &rule::Params::mull_endgame_q_w)
+        .def_readwrite("mull_endgame_z", &rule::Params::mull_endgame_z)
+        .def_readwrite("suit_net_z", &rule::Params::suit_net_z);
     m.def("rule_agent_choose",
           [rollout_inputs](py::array_t<int64_t> hands,
              py::array_t<int32_t> trick_cards, py::array_t<int32_t> trick_players,

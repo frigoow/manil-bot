@@ -114,6 +114,71 @@ Deal TrumpConstrainedDealSampler::sampleDeal(
     );
 }
 
+std::vector<Deal> TrumpConstrainedDealSampler::sampleDeals(
+    const PublicState& public_state,
+    int n,
+    bool allow_short
+) const {
+    if (n <= 0)
+        return {};
+    if (!shouldApplyConstraint(public_state))
+        return m_uniform_sampler.sampleDeals(public_state, n, false);
+
+    // Build the uniform DP table once by drawing chunks from sampleDeals().
+    std::vector<Deal> accepted;
+    accepted.reserve(static_cast<size_t>(n));
+    const int max_draws = allow_short ? 2 * n : n;
+    int draws_used = 0;
+    while (draws_used < max_draws && static_cast<int>(accepted.size()) < n) {
+        // Estimate chunk size: draw enough uniform proposals to likely finish.
+        const int need = n - static_cast<int>(accepted.size());
+        const int chunk = std::min(need * 4, m_max_attempts);
+        auto proposals = m_uniform_sampler.sampleDeals(public_state, chunk, false);
+        int local_attempts = 0;
+        for (const Deal& deal : proposals) {
+            ++local_attempts;
+            const int64_t original_hand = reconstructOriginalDeclarerHand(public_state, deal);
+            if (prior::trump_consistency(original_hand, public_state.trump_suit) == 1.0) {
+                accepted.push_back(deal);
+                m_total_attempts.fetch_add(static_cast<uint64_t>(local_attempts), std::memory_order_relaxed);
+                m_total_accepted.fetch_add(1, std::memory_order_relaxed);
+                local_attempts = 0;
+                ++draws_used;
+                if (static_cast<int>(accepted.size()) >= n)
+                    break;
+            } else if (local_attempts >= m_max_attempts) {
+                m_total_attempts.fetch_add(static_cast<uint64_t>(local_attempts), std::memory_order_relaxed);
+                local_attempts = 0;
+                ++draws_used;
+                if (!allow_short) {
+                    throw RejectionBudgetExhausted(
+                        "TrumpConstrainedDealSampler: exhausted rejection budget without a trump-consistent deal."
+                    );
+                }
+                if (draws_used >= max_draws)
+                    break;
+            }
+        }
+        if (local_attempts > 0) {
+            m_total_attempts.fetch_add(static_cast<uint64_t>(local_attempts), std::memory_order_relaxed);
+            if (local_attempts >= m_max_attempts) {
+                ++draws_used;
+                if (!allow_short) {
+                    throw RejectionBudgetExhausted(
+                        "TrumpConstrainedDealSampler: exhausted rejection budget without a trump-consistent deal."
+                    );
+                }
+            }
+        }
+    }
+    if (accepted.empty() && !allow_short) {
+        throw RejectionBudgetExhausted(
+            "TrumpConstrainedDealSampler: exhausted rejection budget without a trump-consistent deal."
+        );
+    }
+    return accepted;
+}
+
 TrumpConstrainedDealSampler::RollingStats TrumpConstrainedDealSampler::rollingStats() const {
     return RollingStats{
         m_total_attempts.load(std::memory_order_relaxed),

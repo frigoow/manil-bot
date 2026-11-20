@@ -52,7 +52,9 @@ struct Net {
     int h1 = 0, h2 = 0;
     std::vector<float> w1, b1, w2, b2, w3, b3;
     std::vector<float> w1t;  // [in][h1]: first layer by input column, for the sparse sum
-    void finalize();         // builds w1t; throws on a shape mismatch
+    std::vector<float> w2t;  // [h1][h2]: transposed layer 2 for sparse-ReLU SAXPY
+    std::vector<float> w3t;  // [h2][32]: transposed layer 3 for sparse-ReLU SAXPY
+    void finalize();         // builds w1t/w2t/w3t; throws on a shape mismatch
     bool empty() const { return h1 == 0; }
 };
 
@@ -64,6 +66,16 @@ Net load_binary(const std::string& path);
 
 // The net's card for `seat` to move: argmax logit over the legal cards.
 int choose(const Net& net, const ManilleGame& game, int seat);
+
+// Honest soft action log-likelihood over `history` for each sampled world:
+// replays the public history once, precomputes public layer-1 activations per
+// ply, and sums weight * log_softmax(logits / tau)[actual_card] over non-forced
+// plays by seats other than `me` (`partner_w` for me+2, `opp_w` for me+1/me+3).
+std::vector<double> history_log_likelihood(
+    const Net& net, int trump, int declarer, int me,
+    const std::vector<rollout::World>& worlds,
+    const rollout::History& history,
+    double tau, double partner_w, double opp_w);
 
 // rollout::evaluate_candidates with every seat following the net: my team's
 // final points, [candidate][world].
