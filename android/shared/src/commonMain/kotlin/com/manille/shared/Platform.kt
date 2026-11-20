@@ -39,6 +39,8 @@ object ModelNames {
     const val ANNOUNCE = "manille_announce_v1.onnx"
     const val DECLARATION = "manille_decl_v1.onnx"
     const val FAST_NET = "manille_fast_policy_v1.bin"
+    /** Optional dedicated trump-deal fast play-out net (falls back to [FAST_NET] when absent). */
+    const val FAST_NET_SUIT = "manille_fast_policy_suit_v1.bin"
 }
 
 /** Small named text files in the app's private storage. */
