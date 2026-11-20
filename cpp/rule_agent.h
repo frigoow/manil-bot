@@ -148,6 +148,15 @@ struct Params {
     // paired-test z on suit deals when the fast policy net plays the
     // continuation (< 0 = use playout_z)
     double suit_net_z = -1.0;
+    // two-stage candidate racing: evaluate all legal cards on playout_race_k
+    // worlds first, prune cards > playout_race_z SE behind the leader, and
+    // run the remaining worlds only on surviving contenders (0 = off)
+    int playout_race_k = 0;
+    double playout_race_z = 2.5;
+    // optional late-deal Q blend weight on suit deals at trick 7..8 (hand size
+    // <= 2): when >= 0 and trump >= 0, linearly tapers base_qw from trick 1
+    // (hand size 8) to trick 7 (hand size 2)
+    double suit_root_q_w_late = -1.0;
 };
 
 struct Decision {

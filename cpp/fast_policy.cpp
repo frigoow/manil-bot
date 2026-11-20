@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include "bitops.h"
+#include "parallel.h"
 
 namespace fastpolicy {
 namespace {
@@ -437,70 +438,86 @@ std::vector<double> history_log_likelihood(
                 add_pub(F_BINARY + 0, pts[seat % 2] / 60.0f);
                 add_pub(F_BINARY + 1, pts[1 - seat % 2] / 60.0f);
 
-                std::unordered_map<int64_t, double> cache;
-                cache.reserve(nw);
+                std::unordered_map<int64_t, size_t> hand_to_id;
+                hand_to_id.reserve(nw);
+                std::vector<int64_t> uniq_hands;
+                uniq_hands.reserve(nw);
+                std::vector<size_t> world_to_id(nw);
                 for (size_t wi = 0; wi < nw; ++wi) {
                     const int64_t hand = hands[wi][seat];
-                    auto it = cache.find(hand);
-                    if (it != cache.end()) {
-                        loglik[wi] += seat_w * it->second;
-                        continue;
+                    auto it = hand_to_id.find(hand);
+                    if (it == hand_to_id.end()) {
+                        const size_t id = uniq_hands.size();
+                        hand_to_id.emplace(hand, id);
+                        uniq_hands.push_back(hand);
+                        world_to_id[wi] = id;
+                    } else {
+                        world_to_id[wi] = it->second;
                     }
-                    const int64_t leg = fastLegalMask(hand, seat, nt, led, ws, wc, trump);
-                    if ((leg & (leg - 1)) == 0) {
-                        cache.emplace(hand, 0.0);
-                        continue;
-                    }
-                    if (!((leg >> actual) & 1)) {
-                        cache.emplace(hand, -20.0);
-                        loglik[wi] += seat_w * (-20.0);
-                        continue;
-                    }
-                    std::memcpy(a1.data(), pub_a1.data(), static_cast<size_t>(h1) * sizeof(float));
+                }
+                std::vector<double> uniq_lp(uniq_hands.size(), 0.0);
+                const float* pub_ptr = pub_a1.data();
+                manille_parallel::parallel_for(uniq_hands.size(), 32, [&](size_t b, size_t e) {
+                    thread_local std::vector<float> tl_a1, tl_a2;
+                    tl_a1.resize(static_cast<size_t>(h1));
+                    tl_a2.resize(static_cast<size_t>(h2));
                     auto add_a1 = [&](int idx) {
                         const float* col = w1t + static_cast<size_t>(idx) * h1;
                         for (int o = 0; o < h1; ++o)
-                            a1[o] += col[o];
+                            tl_a1[o] += col[o];
                     };
-                    const int64_t seen = pub_seen | hand;
-                    int64_t m = hand;
-                    while (m) {
-                        const int c = manille::ctz64(static_cast<unsigned long long>(m));
-                        m &= m - 1;
-                        add_a1(F_HAND + c);
-                        const int64_t ab = suitMask(suitOf(c)) & ~((bit(c) << 1) - 1);
-                        if ((ab & ~seen) == 0)
-                            add_a1(F_MASTER + c);
-                    }
-                    m = leg;
-                    while (m) {
-                        const int c = manille::ctz64(static_cast<unsigned long long>(m));
-                        m &= m - 1;
-                        add_a1(F_LEGAL + c);
-                        if (nt > 0 && beatsCard(c, wc, trump))
-                            add_a1(F_WINS + c);
-                    }
-                    alignas(32) float logits[32];
-                    forwardLayers23(net, a1.data(), a2.data(), logits);
+                    for (size_t ui = b; ui < e; ++ui) {
+                        const int64_t hand = uniq_hands[ui];
+                        const int64_t leg = fastLegalMask(hand, seat, nt, led, ws, wc, trump);
+                        if ((leg & (leg - 1)) == 0) {
+                            uniq_lp[ui] = 0.0;
+                            continue;
+                        }
+                        if (!((leg >> actual) & 1)) {
+                            uniq_lp[ui] = -20.0;
+                            continue;
+                        }
+                        std::memcpy(tl_a1.data(), pub_ptr, static_cast<size_t>(h1) * sizeof(float));
+                        const int64_t seen = pub_seen | hand;
+                        int64_t m = hand;
+                        while (m) {
+                            const int c = manille::ctz64(static_cast<unsigned long long>(m));
+                            m &= m - 1;
+                            add_a1(F_HAND + c);
+                            const int64_t ab = suitMask(suitOf(c)) & ~((bit(c) << 1) - 1);
+                            if ((ab & ~seen) == 0)
+                                add_a1(F_MASTER + c);
+                        }
+                        m = leg;
+                        while (m) {
+                            const int c = manille::ctz64(static_cast<unsigned long long>(m));
+                            m &= m - 1;
+                            add_a1(F_LEGAL + c);
+                            if (nt > 0 && beatsCard(c, wc, trump))
+                                add_a1(F_WINS + c);
+                        }
+                        alignas(32) float logits[32];
+                        forwardLayers23(net, tl_a1.data(), tl_a2.data(), logits);
 
-                    double max_l = -1e18, actual_l = -1e18, lgs[8];
-                    int nl = 0;
-                    m = leg;
-                    while (m) {
-                        const int c = manille::ctz64(static_cast<unsigned long long>(m));
-                        m &= m - 1;
-                        const double sc = double(logits[c]) * inv_tau;
-                        lgs[nl++] = sc;
-                        if (sc > max_l) max_l = sc;
-                        if (c == actual) actual_l = sc;
+                        double max_l = -1e18, actual_l = -1e18, lgs[8];
+                        int nl = 0;
+                        m = leg;
+                        while (m) {
+                            const int c = manille::ctz64(static_cast<unsigned long long>(m));
+                            m &= m - 1;
+                            const double sc = double(logits[c]) * inv_tau;
+                            lgs[nl++] = sc;
+                            if (sc > max_l) max_l = sc;
+                            if (c == actual) actual_l = sc;
+                        }
+                        double sum_e = 0.0;
+                        for (int i = 0; i < nl; ++i)
+                            sum_e += std::exp(lgs[i] - max_l);
+                        uniq_lp[ui] = (actual_l - max_l) - std::log(sum_e);
                     }
-                    double sum_e = 0.0;
-                    for (int i = 0; i < nl; ++i)
-                        sum_e += std::exp(lgs[i] - max_l);
-                    const double lp = (actual_l - max_l) - std::log(sum_e);
-                    cache.emplace(hand, lp);
-                    loglik[wi] += seat_w * lp;
-                }
+                });
+                for (size_t wi = 0; wi < nw; ++wi)
+                    loglik[wi] += seat_w * uniq_lp[world_to_id[wi]];
             }
         }
 
@@ -539,34 +556,36 @@ std::vector<std::vector<double>> evaluate_candidates(
     const rollout::History& history) {
     std::vector<std::vector<double>> out(candidates.size(),
                                          std::vector<double>(worlds.size(), 0.0));
-    for (size_t wi = 0; wi < worlds.size(); ++wi) {
-        rollout::World start = worlds[wi];
-        for (auto& sc : history)
-            start[sc.first] |= bit(sc.second);
-        ManilleGame base(start, std::array<int32_t, 4>{}, std::array<int32_t, 4>{}, 0,
-                         (declarer + 1) % 4, trump, 0, 0, 0, 0,
-                         std::array<int32_t, 32>{}, std::array<int32_t, 32>{}, 0,
-                         false, declarer);
-        base.startPlaying();
-        for (auto& sc : history)
-            base.doMove(Card::from_index(sc.second));
-        for (size_t ci = 0; ci < candidates.size(); ++ci) {
-            ManilleGame g = base;
-            g.doMove(Card::from_index(candidates[ci]));
-            while (!g.finished()) {
-                const int seat = static_cast<int>(g.currentPlayer());
-                const int64_t hand = g.handMask(seat);
-                int c;
-                if ((hand & (hand - 1)) == 0) {
-                    c = manille::ctz64(static_cast<unsigned long long>(hand));  // last card
-                } else {
-                    c = choose(net, g, seat);
+    manille_parallel::parallel_for(worlds.size(), 16, [&](size_t b, size_t e) {
+        for (size_t wi = b; wi < e; ++wi) {
+            rollout::World start = worlds[wi];
+            for (auto& sc : history)
+                start[sc.first] |= bit(sc.second);
+            ManilleGame base(start, std::array<int32_t, 4>{}, std::array<int32_t, 4>{}, 0,
+                             (declarer + 1) % 4, trump, 0, 0, 0, 0,
+                             std::array<int32_t, 32>{}, std::array<int32_t, 32>{}, 0,
+                             false, declarer);
+            base.startPlaying();
+            for (auto& sc : history)
+                base.doMove(Card::from_index(sc.second));
+            for (size_t ci = 0; ci < candidates.size(); ++ci) {
+                ManilleGame g = base;
+                g.doMove(Card::from_index(candidates[ci]));
+                while (!g.finished()) {
+                    const int seat = static_cast<int>(g.currentPlayer());
+                    const int64_t hand = g.handMask(seat);
+                    int c;
+                    if ((hand & (hand - 1)) == 0) {
+                        c = manille::ctz64(static_cast<unsigned long long>(hand));  // last card
+                    } else {
+                        c = choose(net, g, seat);
+                    }
+                    g.doMove(Card::from_index(c));
                 }
-                g.doMove(Card::from_index(c));
+                out[ci][wi] = g.teamPoints(me % 2);
             }
-            out[ci][wi] = g.teamPoints(me % 2);
         }
-    }
+    });
     return out;
 }
 

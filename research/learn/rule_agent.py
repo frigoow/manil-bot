@@ -215,6 +215,9 @@ DEFAULTS = dict(
     mull_endgame_q_w=-1.0, # root Q weight when mull AB runs (< 0 = normal qw)
     mull_endgame_z=-1.0,   # z threshold when mull AB runs (< 0 = playout_z)
     suit_net_z=-1.0,       # z threshold on suit deals with fast_policy (< 0 = playout_z)
+    playout_race_k=0,      # two-stage candidate racing Stage-1 world count (0 = off)
+    playout_race_z=2.5,    # Stage-1 pruning z-bound in paired SEs
+    suit_root_q_w_late=-1.0,  # late-deal Q blend weight on suit deals (< 0 = off)
     native=False,          # run the deploy path in C++ (cpp/rule_agent.cpp) when the
                            # params allow it (native_supported); nets stay in Python
 )
@@ -244,7 +247,8 @@ NATIVE_FIELDS = (
     'ruff_convention through_fix last_ruff_low playout_z playout_nt_rules playout_tr_rules '
     'lik_belief_w lik_partner_eps lik_opp_eps root_q_w '
     'playout_sir lik_net_partner_w lik_net_opp_w lik_net_tau '
-    'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z suit_net_z').split()
+    'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z suit_net_z '
+    'playout_race_k playout_race_z suit_root_q_w_late').split()
 
 
 class Knowledge:

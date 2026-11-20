@@ -1371,7 +1371,10 @@ PYBIND11_MODULE(manille_ismcts, m) {
         .def_readwrite("mull_endgame_ab_cards", &rule::Params::mull_endgame_ab_cards)
         .def_readwrite("mull_endgame_q_w", &rule::Params::mull_endgame_q_w)
         .def_readwrite("mull_endgame_z", &rule::Params::mull_endgame_z)
-        .def_readwrite("suit_net_z", &rule::Params::suit_net_z);
+        .def_readwrite("suit_net_z", &rule::Params::suit_net_z)
+        .def_readwrite("playout_race_k", &rule::Params::playout_race_k)
+        .def_readwrite("playout_race_z", &rule::Params::playout_race_z)
+        .def_readwrite("suit_root_q_w_late", &rule::Params::suit_root_q_w_late);
     m.def("rule_agent_choose",
           [rollout_inputs](py::array_t<int64_t> hands,
              py::array_t<int32_t> trick_cards, py::array_t<int32_t> trick_players,

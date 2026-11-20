@@ -215,8 +215,8 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
 
     companion object {
         const val N_WORLDS = 400
-        /** Sampled worlds when the fast play-out net is enabled (SIR caps play-out at 768). */
-        const val N_WORLDS_NET = 800
+        /** Sampled worlds when the fast play-out net is enabled (SIR + two-stage racing up to 1536). */
+        const val N_WORLDS_NET = 1600
         /**
          * Hand the play-out over to the rule policy on a trick boundary: the
          * net finishes the trick its plies end in, so "1 trick" = 4 plies
