@@ -26,8 +26,8 @@ android {
         applicationId = "com.manille.androidapp"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "1.1.2"
+        versionCode = 12
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BOT_NAMES", "\"$botNames\"")
