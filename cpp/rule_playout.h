@@ -92,6 +92,15 @@ std::vector<std::vector<double>> evaluate_candidates(
     const Options& opt,
     const NetChoose* net = nullptr, int net_plies = 0, bool net_to_trick_end = false);
 
+// Exact double-dummy alpha-beta minimax for each (candidate, world): returns
+// final team points of `me`'s team under optimal play by both partnerships.
+// Intended for the endgame (e.g. hand size <= 4); deduplicates identical worlds
+// internally and shares a trick-boundary transposition table across candidates.
+std::vector<std::vector<double>> evaluate_endgame(
+    const ManilleGame& game, int me,
+    const std::vector<int>& candidates,
+    const std::vector<World>& worlds);
+
 // Likelihood weight per world: each play by another seat that the policy
 // would not have made in that world multiplies the weight by eps.
 std::vector<double> world_weights(

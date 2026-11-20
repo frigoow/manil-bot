@@ -1,5 +1,6 @@
 #include "mobile/manille_mobile.h"
 
+#include "bitops.h"
 #include "encoding.h"
 #include "manille_game.h"
 #include "prior/trump_rule.h"
@@ -417,23 +418,21 @@ std::vector<rollout::World> sample_worlds(const ManilleGame& g, bool trump_rule_
                          g.teamPoints(0), g.teamPoints(1), g.tricksWon(0),
                          g.tricksWon(1), pc, pp, g.playedCardCount(), false,
                          trump_rule_known ? g.declarer() : -1);
-    std::vector<rollout::World> worlds;
-    worlds.reserve(static_cast<size_t>(n));
-    for (int draw = 0; draw < 2 * n && static_cast<int>(worlds.size()) < n; ++draw) {
-        ManilleGame::Clone clone;
-        try {
-            clone = sampling.cloneAndRandomise(static_cast<unsigned int>(me));
-        } catch (const sampler::RejectionBudgetExhausted&) {
-            continue;
-        }
-        auto* det = dynamic_cast<ManilleGame*>(clone.get());
-        if (det == nullptr)
-            throw std::runtime_error("Determinization failed.");
-        rollout::World w;
-        for (int p = 0; p < 4; ++p)
-            w[p] = det->handMask(p);
-        worlds.push_back(w);
+    static const sampler::TrumpConstrainedDealSampler s_sampler;
+    const auto public_state = sampler::PublicState::fromGame(sampling, me);
+    // Late in the deal (<= 4 cards in hand), exact enumeration replaces
+    // sampling-with-replacement when all consistent worlds fit within n.
+    std::vector<sampler::Deal> deals;
+    if (!trump_rule_known && n > 0
+            && manille::popcount64(static_cast<unsigned long long>(g.handMask(me))) <= 4) {
+        deals = s_sampler.enumerateDeals(public_state, static_cast<size_t>(n));
     }
+    if (deals.empty())
+        deals = s_sampler.sampleDeals(public_state, n, true);
+    std::vector<rollout::World> worlds;
+    worlds.reserve(deals.size());
+    for (const auto& d : deals)
+        worlds.push_back(d.hands);
     return worlds;
 }
 
@@ -511,18 +510,28 @@ int manille_mobile_fastnet_set_plies(ManilleFastNet* net, int32_t plies) {
 // The rule agent's settings in the app.
 static rule::Params deployed_params() {
     rule::Params params;
-    // Deployed play-out rules (research repo, declared-deal A/Bs over
-    // 3000 deals each):
+    // Deployed play-out rules:
     //  - no trump: also cash team bosses and cross to the suit where
-    //    partner holds the most bosses (bits 128 + 256): +0.49 and
-    //    +0.51 pts/deal on two fresh deal sets;
+    //    partner holds the most bosses (bits 128 + 256);
     //  - defending a suit with a weak trump holding (<= 2 trumps,
-    //    <= 3 pts), a trump lead must beat the plan's card by 1 point:
-    //    user feedback on weak trump leads; removes ~90% of them at no
-    //    measurable cost (+0.09 [-0.14, +0.32]).
+    //    <= 3 pts), a trump lead must beat the plan's card by 1 point;
+    //  - weight-first world deduplication + deterministic stratified
+    //    resampling (playout_sir) cuts low-weight world waste;
+    //  - suit deals with fast-policy net: honest soft action log-likelihood
+    //    replaces clairvoyant rule mismatches, and z = 0.5;
+    //  - mull deals at <= 3 cards/hand: exact double-dummy alpha-beta solver
+    //    with ab_qw = 0.15 and ab_z = 0.0.
     params.playout_nt_rules = 31 | 128 | 256;
     params.def_trump_margin = 1.0;
     params.def_trump_lock_weak = true;
+    params.playout_sir = true;
+    params.lik_net_partner_w = 0.45;
+    params.lik_net_opp_w = 0.30;
+    params.lik_net_tau = 1.0;
+    params.mull_endgame_ab_cards = 3;
+    params.mull_endgame_q_w = 0.15;
+    params.mull_endgame_z = 0.0;
+    params.suit_net_z = 0.5;
     return params;
 }
 
@@ -553,6 +562,7 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
         if (net) {
             params.playout_net_plies = net->plies;
             params.playout_net_trick_end = net->trick_end;
+            params.playout_worlds = 768;
         }
         rule::Decision d = rule::choose(g, static_cast<int>(g.currentPlayer()), g.declarer(),
                                         ws, history_of(g), belief, q, params, extra,

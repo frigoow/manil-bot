@@ -68,21 +68,27 @@ Every move, for whichever bot is to play:
 1. **Track** what is public: the cards played, who showed out of which suit,
    the calls.
 2. **Sample worlds**: 400 deals of the hidden cards consistent with everything
-   seen so far. Each is weighted by a **belief network** (which seat holds
-   which unseen card) and by how well the play so far fits the rule policy.
-   After a knock, worlds are reweighted by how likely each hand was to make
-   that call.
+   seen so far on *Standard* (800 when the fast play-out net is enabled, or
+   exact enumeration late in the deal when all consistent worlds fit). Each is
+   weighted by a **belief network** (which seat holds which unseen card) and by
+   play-history likelihood (the fast net's honest card probabilities on trump
+   deals, rule-policy mismatches otherwise). After a knock, worlds are
+   reweighted by how likely each hand was to make that call, then deduplicated
+   and stratified-resampled before play-out.
 3. **Rule tiers** propose a card: cash winners, keep the partner's trick, don't
    feed the opponents' trick, lead the suit that develops tricks -- with a
    separate rule set for no-trump play.
 4. **Play-out**: for every legal card, each world is played to the end of the
-   deal by a fast rule policy, which gives the expected final score of every
-   card.
-5. **Blend** each card's play-out value with a learned **Q-network** (60/40),
-   and overrule the tiers' proposal only when the paired evidence across worlds
-   clears a z-test.
+   deal by a fast rule or learned policy (or solved exactly by double-dummy
+   alpha-beta in the last 3 tricks of a mull deal), giving the expected final
+   score of every card.
+5. **Blend** each card's play-out value with a learned **Q-network** (60/40,
+   85/15 in the exact mull endgame), and overrule the tiers' proposal only when
+   the paired evidence across worlds clears a z-test.
 
-A move takes about a tenth of a second on one CPU core.
+Sampling, knock weighting and play-out take about 8 ms/move on *Standard*
+(2.4 ms on undoubled deals) and 50 ms/move on *Whole deal* (39 ms undoubled) on
+one desktop CPU core -- well under a tenth of a second even on *Whole deal*.
 
 The calls -- trump or mull, knock, knock back -- come from a separate
 **decision layer**. It plays for the *match*, not for the points of one deal:
@@ -128,6 +134,25 @@ kind of test: the no-trump play-out (cash the team's sure winners, cross to
 the partner's) +0.49 and +0.51 on two separate sets of mull deals; the
 defenders' trump leads from weak holdings fell from about 25 to 2 per 150
 trump deals at no measurable cost (+0.09 [−0.14, +0.32]).
+
+**Latest rule-agent improvements against the shipped 36M Q-GRU network** (1000
+trump deals and 1000 mull deals, duplicate, with real declarations and knocks;
+1-core time measures sampling + knock weighting + play-out on a desktop core):
+
+| Bot thinking | Trump deals | with knocks | Mull deals | with knocks | 1-core time |
+|---|---|---|---|---|---|
+| v1.1.2 Standard | +1.45 [+1.07, +1.82] | +1.00 [+0.72, +1.28] | +1.54 [+1.02, +2.06] | +1.68 [+1.12, +2.23] | ~26 ms |
+| v1.1.2 Whole deal | +1.54 [+1.17, +1.90] | +1.26 [+0.96, +1.57] | +1.14 [+0.66, +1.63] | +1.15 [+0.63, +1.67] | ~490 ms |
+| Standard (400 worlds) | +1.30 [+0.92, +1.68] | +0.94 [+0.65, +1.22] | +1.71 [+1.19, +2.24] | +1.77 [+1.22, +2.32] | 7.9 ms |
+| 2 tricks (800 worlds) | +1.87 [+1.50, +2.24] | +1.31 [+1.01, +1.61] | **+1.76** [+1.28, +2.24] | **+1.89** [+1.34, +2.44] | 35.6 ms |
+| **Whole deal** (800 worlds) | **+2.13** [+1.76, +2.50] | **+1.60** [+1.30, +1.91] | **+1.75** [+1.27, +2.24] | **+1.88** [+1.37, +2.38] | 50.2 ms |
+
+On paired deals, the new *Whole deal* beats v1.1.2 *Whole deal* by **+0.59**
+[+0.19, +0.99] on trump deals (+0.34 [+0.01, +0.67] with knocks) and **+0.61**
+[+0.10, +1.12] on mull deals (+0.72 [+0.17, +1.27] with knocks) while running
+roughly 10× faster, and beats v1.1.2 *Standard* by **+0.68** [+0.24, +1.12] on
+trump deals (+0.61 [+0.25, +0.96] with knocks). Defenders' trump leads from weak
+holdings stay low (~3.9 per 150 trump deals).
 
 How to rerun these matches: [research/README.md](research/README.md).
 

@@ -726,11 +726,18 @@ std::vector<std::vector<double>> evaluate_candidates(
             bool net_on = net && net_plies > 0;
             while (!r.game.finished()) {
                 int seat = static_cast<int>(r.game.currentPlayer());
-                std::vector<int> legal = legalOf(r.game);
                 net_on = net_on && (ply < net_plies || (net_to_trick_end && !r.trick.empty()));
-                int c = (net_on && legal.size() > 1)
-                    ? (*net)(r.game, seat)
-                    : r.policy.choose(seat, legal, handsOf(r.game), r.trick);
+                int c;
+                if (net_on) {
+                    const int64_t hm = r.game.handMask(seat);
+                    if ((hm & (hm - 1)) == 0)
+                        c = manille::ctz64(static_cast<unsigned long long>(hm));
+                    else
+                        c = (*net)(r.game, seat);
+                } else {
+                    std::vector<int> legal = legalOf(r.game);
+                    c = r.policy.choose(seat, legal, handsOf(r.game), r.trick);
+                }
                 play(r, seat, c);
                 ++ply;
             }
@@ -785,6 +792,323 @@ std::vector<std::array<int, 4>> world_mismatches(
             }
             play(r, sc.first, sc.second);
         }
+    }
+    return out;
+}
+
+namespace {
+
+inline uint32_t suitMask32(int s) { return 0xFFu << (s * 8); }
+inline uint32_t higherInSuit32(int card) {
+    return suitMask32(card >> 3) & static_cast<uint32_t>(~((uint64_t(2) << card) - 1ULL));
+}
+inline bool beatsCard(int a, int b, int trump) {
+    const int sa = a >> 3, sb = b >> 3;
+    if (sa == sb) return (a & 7) > (b & 7);
+    return sa == trump;
+}
+
+inline uint32_t fastLegalMask(uint32_t hand, int n_trick, int led,
+                              int w_card, int w_player, int cur, int trump) {
+    if (n_trick == 0)
+        return hand;
+    const uint32_t following = hand & suitMask32(led);
+    const bool partner_winning = (w_player == ((cur + 2) & 3));
+    if (following) {
+        if (partner_winning)
+            return following;
+        if ((w_card >> 3) == led) {
+            const uint32_t beating = following & higherInSuit32(w_card);
+            return beating ? beating : following;
+        }
+        return following;
+    }
+    if (partner_winning || trump < 0)
+        return hand;
+    const uint32_t tr_mask = suitMask32(trump);
+    const uint32_t trumps = hand & tr_mask;
+    if (!trumps)
+        return hand;
+    if ((w_card >> 3) == trump) {
+        const uint32_t higher_tr = trumps & higherInSuit32(w_card);
+        if (higher_tr)
+            return higher_tr;
+        const uint32_t non_tr = hand & ~tr_mask;
+        return non_tr ? non_tr : trumps;
+    }
+    return trumps;
+}
+
+// Prune strictly equivalent 0-point cards (7, 8, 9 of the same suit) when no
+// live card in another hand or current winning card lies between them.
+inline uint32_t pruneEquivalentZeroPts(uint32_t legal, uint32_t others, int n_trick, int w_card) {
+    uint32_t out = legal;
+    for (int s = 0; s < 4; ++s) {
+        const uint32_t low3 = (legal >> (s * 8)) & 7u;
+        if ((low3 & (low3 - 1u)) == 0)
+            continue;  // 0 or 1 of {7,8,9}
+        const int base = s * 8;
+        if ((low3 & 3u) == 3u)  // both 7 and 8 -> drop 8
+            out &= ~(1u << (base + 1));
+        if ((low3 & 6u) == 6u)  // both 8 and 9 -> drop 9
+            out &= ~(1u << (base + 2));
+        else if (low3 == 5u) {  // 7 and 9 without 8 -> drop 9 if 8 is dead
+            const int c8 = base + 1;
+            const bool c8_live = ((others >> c8) & 1u) != 0 || (n_trick > 0 && w_card == c8);
+            if (!c8_live)
+                out &= ~(1u << (base + 2));
+        }
+    }
+    return out;
+}
+
+struct EndgameTTEntry {
+    uint32_t h[4];
+    uint16_t gen;
+    uint8_t cur;
+    int8_t lo;
+    int8_t hi;
+};
+
+struct EndgameSolver {
+    static constexpr size_t TT_SIZE = 1u << 14;  // 16384 entries (~384 KB)
+    static constexpr size_t TT_MASK = TT_SIZE - 1;
+    std::vector<EndgameTTEntry> tt;
+    uint16_t gen = 1;
+    int trump = -1;
+
+    EndgameSolver() : tt(TT_SIZE) {
+        for (auto& e : tt) e.gen = 0;
+    }
+
+    void newWorld(int t) {
+        trump = t;
+        ++gen;
+        if (gen == 0) {
+            for (auto& e : tt) e.gen = 0;
+            gen = 1;
+        }
+    }
+
+    static inline size_t hashState(const uint32_t h[4], int cur) {
+        uint64_t x = (uint64_t(h[0]) << 32) | h[1];
+        uint64_t y = (uint64_t(h[2]) << 32) | h[3];
+        x ^= y * 0x9e3779b97f4a7c15ULL;
+        x ^= static_cast<uint64_t>(cur) * 0xbf58476d1ce4e5b9ULL;
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ULL;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebULL;
+        x ^= x >> 31;
+        return static_cast<size_t>(x) & TT_MASK;
+    }
+
+    // Returns optimal remaining Team-0 points from the start of the current
+    // trick (rem_pts = trick_pts + points of all cards remaining in hands).
+    int ab(uint32_t h[4], int cur, int n_trick, int led, int w_card, int w_player,
+           int trick_pts, int rem_pts, int alpha, int beta) {
+        if (rem_pts == 0)
+            return 0;
+        if (0 >= beta)
+            return 0;
+        if (rem_pts <= alpha)
+            return rem_pts;
+
+        int orig_alpha = alpha, orig_beta = beta;
+        size_t tt_idx = 0;
+        if (n_trick == 0) {
+            tt_idx = hashState(h, cur);
+            const auto& e = tt[tt_idx];
+            if (e.gen == gen && e.cur == cur && e.h[0] == h[0] && e.h[1] == h[1]
+                    && e.h[2] == h[2] && e.h[3] == h[3]) {
+                if (e.lo == e.hi) return e.lo;
+                if (e.lo >= beta) return e.lo;
+                if (e.hi <= alpha) return e.hi;
+                if (e.lo > alpha) alpha = e.lo;
+                if (e.hi < beta) beta = e.hi;
+                if (alpha >= beta) return alpha;
+            }
+        }
+
+        uint32_t legal = fastLegalMask(h[cur], n_trick, led, w_card, w_player, cur, trump);
+        const uint32_t others = (h[0] | h[1] | h[2] | h[3]) & ~h[cur];
+        if ((legal & (legal - 1u)) != 0)
+            legal = pruneEquivalentZeroPts(legal, others, n_trick, w_card);
+
+        // Extract moves; order high-rank cards first for faster cutoffs
+        int moves[8];
+        int nm = 0;
+        uint32_t m = legal;
+        while (m) {
+            const int c = manille::ctz64(m);
+            m &= m - 1u;
+            moves[nm++] = c;
+        }
+        // Simple insertion sort by descending (is_trump, rank) when nm > 1
+        if (nm > 1) {
+            for (int i = 1; i < nm; ++i) {
+                const int c = moves[i];
+                const int kc = ((c >> 3) == trump ? 8 : 0) + (c & 7);
+                int j = i - 1;
+                while (j >= 0) {
+                    const int kj = ((moves[j] >> 3) == trump ? 8 : 0) + (moves[j] & 7);
+                    if (kj >= kc) break;
+                    moves[j + 1] = moves[j];
+                    --j;
+                }
+                moves[j + 1] = c;
+            }
+        }
+
+        const bool maxing = (cur & 1) == 0;
+        int best = maxing ? -1 : 61;
+
+        for (int i = 0; i < nm; ++i) {
+            const int c = moves[i];
+            h[cur] ^= (1u << c);
+            const int nt = n_trick + 1;
+            const int n_led = (n_trick == 0) ? (c >> 3) : led;
+            int n_wc = w_card, n_wp = w_player;
+            if (n_trick == 0 || beatsCard(c, w_card, trump)) {
+                n_wc = c;
+                n_wp = cur;
+            }
+            const int n_tpts = trick_pts + PTS[c & 7];
+            int val;
+            if (nt == 4) {
+                const int gain = (n_wp & 1) == 0 ? n_tpts : 0;
+                const int next_rem = rem_pts - n_tpts;
+                if (next_rem == 0 || (h[0] | h[1] | h[2] | h[3]) == 0) {
+                    val = gain;
+                } else {
+                    val = gain + ab(h, n_wp, 0, 0, -1, -1, 0, next_rem,
+                                    alpha - gain, beta - gain);
+                }
+            } else {
+                val = ab(h, (cur + 1) & 3, nt, n_led, n_wc, n_wp, n_tpts, rem_pts, alpha, beta);
+            }
+            h[cur] ^= (1u << c);
+
+            if (maxing) {
+                if (val > best) best = val;
+                if (best > alpha) alpha = best;
+                if (alpha >= beta) break;
+            } else {
+                if (val < best) best = val;
+                if (best < beta) beta = best;
+                if (alpha >= beta) break;
+            }
+        }
+
+        if (n_trick == 0) {
+            auto& e = tt[tt_idx];
+            const bool same = (e.gen == gen && e.cur == cur && e.h[0] == h[0]
+                               && e.h[1] == h[1] && e.h[2] == h[2] && e.h[3] == h[3]);
+            if (!same) {
+                e.h[0] = h[0]; e.h[1] = h[1]; e.h[2] = h[2]; e.h[3] = h[3];
+                e.gen = gen;
+                e.cur = static_cast<uint8_t>(cur);
+                e.lo = 0;
+                e.hi = static_cast<int8_t>(rem_pts);
+            }
+            if (best <= orig_alpha) {
+                if (best < e.hi) e.hi = static_cast<int8_t>(best);
+            } else if (best >= orig_beta) {
+                if (best > e.lo) e.lo = static_cast<int8_t>(best);
+            } else {
+                e.lo = e.hi = static_cast<int8_t>(best);
+            }
+        }
+        return best;
+    }
+};
+
+} // namespace
+
+std::vector<std::vector<double>> evaluate_endgame(
+    const ManilleGame& game, int me,
+    const std::vector<int>& candidates,
+    const std::vector<World>& worlds) {
+    thread_local EndgameSolver solver;
+    std::vector<std::vector<double>> out(candidates.size(),
+                                         std::vector<double>(worlds.size(), 0.0));
+    const int trump = game.trumpSuit();
+    const int base_pts0 = game.teamPoints(0);
+    const int n_trick = game.trickSize();
+    int led = 0, w_card = -1, w_player = -1, base_tpts = 0;
+    if (n_trick > 0) {
+        led = suitOf(game.trickCard(0));
+        w_card = game.trickCard(0);
+        w_player = game.trickPlayer(0);
+        base_tpts = PTS[rankOf(w_card)];
+        for (int i = 1; i < n_trick; ++i) {
+            const int tc = game.trickCard(i);
+            const int tp = game.trickPlayer(i);
+            base_tpts += PTS[rankOf(tc)];
+            if (beatsCard(tc, w_card, trump)) {
+                w_card = tc;
+                w_player = tp;
+            }
+        }
+    }
+
+    // Deduplicate worlds to avoid re-solving identical endgame deals
+    std::vector<size_t> order(worlds.size());
+    for (size_t i = 0; i < worlds.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return worlds[a] < worlds[b];
+    });
+
+    const bool my_team0 = (me % 2 == 0);
+    for (size_t oi = 0; oi < order.size(); ) {
+        const size_t first_wi = order[oi];
+        const World& w = worlds[first_wi];
+        size_t oj = oi + 1;
+        while (oj < order.size() && worlds[order[oj]] == w) ++oj;
+
+        uint32_t h[4] = {
+            static_cast<uint32_t>(w[0]), static_cast<uint32_t>(w[1]),
+            static_cast<uint32_t>(w[2]), static_cast<uint32_t>(w[3])
+        };
+        int rem_pts = base_tpts;
+        uint32_t all_cards = h[0] | h[1] | h[2] | h[3];
+        while (all_cards) {
+            const int c = manille::ctz64(all_cards);
+            all_cards &= all_cards - 1u;
+            rem_pts += PTS[c & 7];
+        }
+
+        solver.newWorld(trump);
+        for (size_t ci = 0; ci < candidates.size(); ++ci) {
+            const int c = candidates[ci];
+            h[me] ^= (1u << c);
+            const int nt = n_trick + 1;
+            const int n_led = (n_trick == 0) ? (c >> 3) : led;
+            int n_wc = w_card, n_wp = w_player;
+            if (n_trick == 0 || beatsCard(c, w_card, trump)) {
+                n_wc = c;
+                n_wp = me;
+            }
+            const int n_tpts = base_tpts + PTS[c & 7];
+            int pts0_rem;
+            if (nt == 4) {
+                const int gain = (n_wp & 1) == 0 ? n_tpts : 0;
+                const int next_rem = rem_pts - n_tpts;
+                if (next_rem == 0 || (h[0] | h[1] | h[2] | h[3]) == 0)
+                    pts0_rem = gain;
+                else
+                    pts0_rem = gain + solver.ab(h, n_wp, 0, 0, -1, -1, 0, next_rem, -1, next_rem + 1);
+            } else {
+                pts0_rem = solver.ab(h, (me + 1) & 3, nt, n_led, n_wc, n_wp, n_tpts, rem_pts,
+                                     -1, rem_pts + 1);
+            }
+            h[me] ^= (1u << c);
+            const int final_pts0 = base_pts0 + pts0_rem;
+            const double team_pts = my_team0 ? double(final_pts0) : double(60 - final_pts0);
+            for (size_t k = oi; k < oj; ++k)
+                out[ci][order[k]] = team_pts;
+        }
+        oi = oj;
     }
     return out;
 }

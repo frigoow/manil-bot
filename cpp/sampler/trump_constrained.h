@@ -44,6 +44,14 @@ public:
         const PublicState& public_state,
         SampleStats* stats = nullptr
     ) const;
+    // Draw up to `n` deals reusing the uniform sampler's DP table once.
+    // Throws RejectionBudgetExhausted only if `allow_short` is false and a
+    // draw exhausts the rejection budget, or if no deals survive at all.
+    std::vector<Deal> sampleDeals(
+        const PublicState& public_state,
+        int n,
+        bool allow_short = true
+    ) const;
     // Every deal sampleDeal can return, exactly once (uniform support filtered
     // by the trump rule); empty when the unfiltered support exceeds max_deals.
     std::vector<Deal> enumerateDeals(const PublicState& public_state,

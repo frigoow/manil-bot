@@ -42,6 +42,12 @@ struct PublicState {
 class UniformDealSampler {
 public:
     Deal sampleDeal(const PublicState& public_state) const;
+    // Draw `n` independent deals from the exact same DP table (built once).
+    // When `enumerate_if_small` is true and the total number of feasible deals
+    // is at most `n`, returns every feasible deal exactly once instead.
+    std::vector<Deal> sampleDeals(const PublicState& public_state,
+                                  int n,
+                                  bool enumerate_if_small = false) const;
     // Every consistent deal exactly once (the support of sampleDeal), or an
     // empty vector when there are more than max_deals of them. Late in the
     // hand the support is small and listing it beats sampling copies of it.
