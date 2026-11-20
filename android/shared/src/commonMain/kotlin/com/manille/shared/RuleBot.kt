@@ -60,12 +60,17 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
      * so a setting change never touches a handle a move is using. Empty when
      * the asset is missing or bad: the rule play-out then runs alone.
      */
-    private val fastNets: Map<Pair<Int, Boolean>, FastNet> = PLY_CHOICES.filter { it > 0 }
-        .map { plies -> plies to TRICK_END }
-        .mapNotNull { key ->
-            runCatching { platform.fastNet(ModelNames.FAST_NET, key.first, key.second) }
-                .getOrNull()?.let { key to it }
-        }.toMap()
+    private fun loadFastNets(file: String): Map<Pair<Int, Boolean>, FastNet> =
+        PLY_CHOICES.filter { it > 0 }
+            .map { plies -> plies to TRICK_END }
+            .mapNotNull { key ->
+                runCatching { platform.fastNet(file, key.first, key.second) }
+                    .getOrNull()?.let { key to it }
+            }.toMap()
+
+    private val fastNets: Map<Pair<Int, Boolean>, FastNet> = loadFastNets(ModelNames.FAST_NET)
+    /** Optional dedicated trump-deal fast play-out net; falls back to [fastNets] when absent. */
+    private val fastNetsSuit: Map<Pair<Int, Boolean>, FastNet> = loadFastNets(ModelNames.FAST_NET_SUIT)
 
     /** Net plies for the play-out, one of [PLY_CHOICES]; 0 = the rule play-out alone. */
     @Volatile var netPlies: Int = 0
@@ -73,7 +78,7 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
     @Volatile var netTrickEnd: Boolean = TRICK_END
 
     /** True when the play-out net loaded, so [netPlies] has an effect. */
-    val hasFastNet: Boolean get() = fastNets.isNotEmpty()
+    val hasFastNet: Boolean get() = fastNets.isNotEmpty() || fastNetsSuit.isNotEmpty()
 
     /**
      * The deal's calls. [declUs]/[declThem] = the declaring team's and the
@@ -111,7 +116,8 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
         val mull = state.trumpSuit < 0
         var t = TimeSource.Monotonic.markNow()
         fun lap(i: Int) { lastTimings[i] = t.elapsedNow().inWholeMilliseconds; t = TimeSource.Monotonic.markNow() }
-        val fastNet = fastNets[netPlies to netTrickEnd]
+        val key = netPlies to netTrickEnd
+        val fastNet = if (!mull) (fastNetsSuit[key] ?: fastNets[key]) else fastNets[key]
         val nWorlds = if (fastNet != null) N_WORLDS_NET else N_WORLDS
         val worlds = game.sampleWorlds(calls.trumpRuleKnown, nWorlds); lap(0)
         val nets = if (mull) mull() else null
@@ -204,6 +210,7 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
     override fun close() {
         beliefTrump.close(); releaseMull()
         fastNets.values.forEach { it.close() }
+        fastNetsSuit.values.forEach { it.close() }
     }
 
     companion object {
