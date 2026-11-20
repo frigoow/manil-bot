@@ -1138,7 +1138,7 @@ std::vector<double> worldWeights(int trump, int dealer, int me, int64_t seen,
                                  const fastpolicy::Net* net = nullptr) {
     const size_t n = worlds.size();
     std::vector<double> logw(n, 0.0);
-    if (belief) {
+    if (belief && !P.worlds_belief_sampled) {
         float lp[3][32];
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 32; ++c)

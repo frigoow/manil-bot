@@ -71,7 +71,12 @@ data class BoardState(
 )
 
 /** Sampled determinizations for the player to move: 4 hand masks per world. */
-class Worlds(val n: Int, val current: LongArray, val dealt: LongArray)
+class Worlds(
+    val n: Int,
+    val current: LongArray,
+    val dealt: LongArray,
+    val beliefSampled: Boolean = false,
+)
 
 /** An opaque loaded fast play-out net (cpp/fast_policy.h). */
 interface FastNet : AutoCloseable
@@ -102,6 +107,14 @@ interface Engine : AutoCloseable {
     fun observation(observer: Int): FloatArray
 
     fun sampleWorlds(trumpRuleKnown: Boolean, nWorlds: Int): Worlds
+    /**
+     * Exact belief-weighted DP world sampling (UniformDealSampler::sampleDealsBelief):
+     * draws worlds directly from the belief distribution when possible, falling back
+     * to exact enumeration or uniform sampling otherwise.
+     */
+    fun sampleWorldsBelief(
+        trumpRuleKnown: Boolean, nWorlds: Int, belief: FloatArray, beliefWeight: Double = 0.75,
+    ): Worlds = sampleWorlds(trumpRuleKnown, nWorlds)
     /**
      * Rule agent move (cpp/rule_agent.h) on [worlds]; [extra] = optional
      * log-weight per world. [outValues] (32, by card) receives each legal

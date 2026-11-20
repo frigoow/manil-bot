@@ -96,6 +96,8 @@ class GameController(private val platform: Platform) : AutoCloseable {
     var showOpenCards by mutableStateOf(false); private set
     var hints by mutableStateOf<Map<Int, Float>>(emptyMap()); private set
     var hintPick by mutableStateOf<Int?>(null); private set
+    private data class CachedHint(val key: Int, val plies: Int, val hints: Map<Int, Float>, val pick: Int?)
+    private var cachedHint: CachedHint? = null
     var declarationHints by mutableStateOf<Map<Int, Float>>(emptyMap()); private set
     var declarationHintPick by mutableStateOf<Int?>(null); private set
     var declarationSummary by mutableStateOf(""); private set
@@ -491,7 +493,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
         val queue = Channel<Pair<TableEvent, TableView>>(Channel.UNLIMITED)
         screenQueue = queue
         screenJob = scope.launch { for ((event, view) in queue) present(event, view) }
-        hints = emptyMap(); hintPick = null; declarationHints = emptyMap(); declarationHintPick = null
+        hints = emptyMap(); hintPick = null; cachedHint = null; declarationHints = emptyMap(); declarationHintPick = null
         callHints = null; callHintPick = false
         heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
         lastTrickCards = emptyList(); lastTrickPlayers = emptyList(); lastTrickWinner = -1
@@ -517,7 +519,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     private suspend fun present(event: TableEvent, view: TableView) {
         when (event) {
             TableEvent.DealStarted -> {
-                hints = emptyMap(); hintPick = null; declarationHints = emptyMap(); declarationHintPick = null
+                hints = emptyMap(); hintPick = null; cachedHint = null; declarationHints = emptyMap(); declarationHintPick = null
                 callHints = null; callHintPick = false
                 lastTrickCards = emptyList(); lastTrickPlayers = emptyList(); lastTrickWinner = -1
                 heldTrickCards = emptyList(); heldTrickPlayers = emptyList(); trickPaused = false; trickCollectTo = -1
@@ -715,8 +717,16 @@ class GameController(private val platform: Platform) : AutoCloseable {
         if (phase != TablePhase.PLAYING || snapshot.currentPlayer != HUMAN || trickPaused) return
         if (hints.isNotEmpty()) { hints = emptyMap(); hintPick = null; return }
         val position = table.hintPosition() ?: return
-        countHint()
         val rule = ruleBot
+        val plies = rule?.netPlies ?: -1
+        val cached = cachedHint
+        if (cached != null && cached.key == position.key && cached.plies == plies) {
+            position.engine.close()
+            hints = cached.hints
+            hintPick = cached.pick
+            return
+        }
+        countHint()
         if (rule != null) { ruleHints(rule, position); return }
         val model = bot ?: run { position.engine.close(); return }
         val game = position.engine
@@ -729,7 +739,9 @@ class GameController(private val platform: Platform) : AutoCloseable {
             val weights = scores.map { exp((it.value - top) * 30.0).toFloat() }
             val total = weights.sum().coerceAtLeast(.0001f)
             hintPick = scores.maxBy { it.value }.card
-            scores.indices.associate { scores[it].card to (weights[it] / total * 100f) }
+            val computed = scores.indices.associate { scores[it].card to (weights[it] / total * 100f) }
+            cachedHint = CachedHint(position.key, plies, computed, hintPick)
+            computed
         } finally { game.close() }
     }
 
@@ -741,6 +753,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
      */
     private fun ruleHints(model: RuleBot, position: HintPosition) {
         val copy = position.engine
+        val plies = model.netPlies
         message = tr("Thinking about a hint…", "Even nadenken over een hint…")
         onWorker {
             val values = DoubleArray(32)
@@ -758,6 +771,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
                     legal.associateWith { if (it == pick) 100f else 0f }
                 }
                 hintPick = pick.takeIf { it in legal }
+                cachedHint = CachedHint(position.key, plies, hints, hintPick)
                 message = tr("Your turn.", "Jouw beurt.")
             }
         }

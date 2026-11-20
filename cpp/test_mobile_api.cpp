@@ -2,11 +2,13 @@
 #undef NDEBUG
 #include "mobile/manille_mobile.h"
 #include "fast_policy.h"
+#include "sampler/uniform.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cmath>
 #include <initializer_list>
+#include <map>
 #include <vector>
 #include <cstdint>
 #include <cstring>
@@ -270,11 +272,16 @@ int main() {
                 for (int ply = 0; ply < 32; ++ply) {
                     int64_t lm = 0;
                     assert(manille_mobile_legal_mask(fg, &lm) == MANILLE_MOBILE_OK);
-                    int32_t nw = 0, pick = -1;
-                    assert(manille_mobile_sample_worlds(fg, 0, 64, cw.data(), iw.data(), &nw)
+                    int32_t nw = 0, pick = -1, bs = -1;
+                    assert(manille_mobile_sample_worlds_belief(
+                               fg, 0, 64, belief, 0.75, cw.data(), iw.data(), &nw, &bs)
                            == MANILLE_MOBILE_OK && nw > 0 && nw <= 64);
-                    assert(manille_mobile_rule_choose_worlds_net(
-                               fg, cw.data(), nw, belief, q, nullptr, net, &pick, values)
+                    // On trick 1 (ply == 0), 24 hidden cards cannot enumerate into 64 -> belief sampled.
+                    if (ply == 0) assert(bs == 1);
+                    // On trick 8 (ply >= 28), <= 3 hidden cards always enumerate -> not belief sampled.
+                    if (ply >= 28) assert(bs == 0);
+                    assert(manille_mobile_rule_choose_worlds_net_ex(
+                               fg, cw.data(), nw, bs, belief, q, nullptr, net, &pick, values)
                            == MANILLE_MOBILE_OK);
                     assert(pick >= 0 && ((lm >> pick) & 1));
                     assert(manille_mobile_apply_card(fg, pick) == MANILLE_MOBILE_OK);
@@ -288,6 +295,83 @@ int main() {
         }
         manille_mobile_destroy(copy);
         manille_mobile_destroy(game);
+    }
+
+    // Verify exact belief-weighted DP sampling distribution against exact enumeration
+    // on a small public state (6 hidden cards across 3 seats: 2 cards each -> 90 worlds).
+    {
+        sampler::PublicState ps{};
+        ps.observer = 1;
+        ps.current_player = 1;
+        ps.observer_hand = (int64_t(1) << 0) | (int64_t(1) << 1);
+        ps.partner_hand = 0;
+        // Cards 2..7 are unseen (6 cards), 8..31 already played across 6 tricks
+        // (no void constraints: every player followed suit in each played trick).
+        ps.trick_cards.fill(-1);
+        ps.trick_players.fill(-1);
+        ps.played_cards.fill(-1);
+        ps.played_players.fill(-1);
+        ps.n_played_cards = 24;
+        for (int i = 0; i < 24; ++i) {
+            ps.played_cards[i] = 8 + i;
+            ps.played_players[i] = i % 4;
+        }
+        ps.hand_sizes = {2, 2, 2, 2};
+        ps.declarer = -1;
+        ps.trump_suit = -1;
+
+        float belief[96]{};
+        // Non-uniform beliefs for cards 2..7 across rel seats 0, 1, 2
+        const float w_table[6][3] = {
+            {0.80f, 0.15f, 0.05f},
+            {0.10f, 0.70f, 0.20f},
+            {0.25f, 0.25f, 0.50f},
+            {0.60f, 0.30f, 0.10f},
+            {0.05f, 0.85f, 0.10f},
+            {0.30f, 0.20f, 0.50f},
+        };
+        for (int i = 0; i < 6; ++i)
+            for (int r = 0; r < 3; ++r)
+                belief[r * 32 + (2 + i)] = w_table[i][r];
+
+        sampler::UniformDealSampler us;
+        auto exact = us.enumerateDeals(ps, 1000);
+        assert(exact.size() == 90);
+
+        const double bw = 0.75;
+        std::map<std::array<int64_t, 4>, double> target_p;
+        double z_sum = 0.0;
+        for (const auto& d : exact) {
+            double wt = 1.0;
+            for (int r = 0; r < 3; ++r) {
+                const int seat = (ps.observer + 1 + r) % 4;
+                int64_t m = d.hands[seat];
+                while (m) {
+                    int c = manille::ctz64(static_cast<unsigned long long>(m));
+                    m &= m - 1;
+                    wt *= std::pow(double(belief[r * 32 + c]) + 1e-9, bw);
+                }
+            }
+            target_p[d.hands] = wt;
+            z_sum += wt;
+        }
+        for (auto& kv : target_p) kv.second /= z_sum;
+
+        sampler::UniformDealSampler::seedPrng(1234567);
+        bool enumerated = true;
+        const int N = 20000;
+        auto draws = us.sampleDealsBelief(ps, N, belief, bw, /*enumerate_if_small=*/false, &enumerated);
+        assert(!enumerated && static_cast<int>(draws.size()) == N);
+
+        std::map<std::array<int64_t, 4>, int> counts;
+        for (const auto& d : draws) counts[d.hands]++;
+
+        double max_err = 0.0;
+        for (const auto& kv : target_p) {
+            const double emp = double(counts[kv.first]) / double(N);
+            max_err = std::max(max_err, std::abs(emp - kv.second));
+        }
+        assert(max_err < 0.015);
     }
     return 0;
 }

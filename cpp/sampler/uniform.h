@@ -48,6 +48,16 @@ public:
     std::vector<Deal> sampleDeals(const PublicState& public_state,
                                   int n,
                                   bool enumerate_if_small = false) const;
+    // Draw `n` independent deals directly from the belief-weighted posterior
+    // P(W) proportional to prod_{(p,c) in W} max(belief[rel(p), c], 1e-6)^belief_w.
+    // When `enumerate_if_small` is true and all feasible deals fit within `n`,
+    // enumerates them once and sets `*out_enumerated = true`.
+    std::vector<Deal> sampleDealsBelief(const PublicState& public_state,
+                                        int n,
+                                        const float* belief,
+                                        double belief_w,
+                                        bool enumerate_if_small = true,
+                                        bool* out_enumerated = nullptr) const;
     // Every consistent deal exactly once (the support of sampleDeal), or an
     // empty vector when there are more than max_deals of them. Late in the
     // hand the support is small and listing it beats sampling copies of it.

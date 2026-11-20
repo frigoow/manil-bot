@@ -397,7 +397,11 @@ rollout::History history_of(const ManilleGame& g) {
 // rule (it then keeps the declarer hands the rule would have declared);
 // unconstrained otherwise -- the rule constraint would be wrong for a
 // chooser's or a human's trump.
-std::vector<rollout::World> sample_worlds(const ManilleGame& g, bool trump_rule_known, int n) {
+std::vector<rollout::World> sample_worlds_impl(const ManilleGame& g, bool trump_rule_known, int n,
+                                               const float* belief, double belief_w,
+                                               bool* out_belief_sampled) {
+    if (out_belief_sampled != nullptr)
+        *out_belief_sampled = false;
     const int me = static_cast<int>(g.currentPlayer());
     std::array<int64_t, 4> hands{};
     for (int p = 0; p < 4; ++p)
@@ -419,21 +423,33 @@ std::vector<rollout::World> sample_worlds(const ManilleGame& g, bool trump_rule_
                          g.tricksWon(1), pc, pp, g.playedCardCount(), false,
                          trump_rule_known ? g.declarer() : -1);
     static const sampler::TrumpConstrainedDealSampler s_sampler;
+    static const sampler::UniformDealSampler u_sampler;
     const auto public_state = sampler::PublicState::fromGame(sampling, me);
-    // Late in the deal (<= 4 cards in hand), exact enumeration replaces
-    // sampling-with-replacement when all consistent worlds fit within n.
     std::vector<sampler::Deal> deals;
-    if (!trump_rule_known && n > 0
-            && manille::popcount64(static_cast<unsigned long long>(g.handMask(me))) <= 4) {
-        deals = s_sampler.enumerateDeals(public_state, static_cast<size_t>(n));
+    if (!trump_rule_known && belief != nullptr && n > 0) {
+        bool enumerated = false;
+        deals = u_sampler.sampleDealsBelief(public_state, n, belief, belief_w, true, &enumerated);
+        if (out_belief_sampled != nullptr)
+            *out_belief_sampled = !enumerated;
+    } else {
+        // Late in the deal (<= 4 cards in hand), exact enumeration replaces
+        // sampling-with-replacement when all consistent worlds fit within n.
+        if (!trump_rule_known && n > 0
+                && manille::popcount64(static_cast<unsigned long long>(g.handMask(me))) <= 4) {
+            deals = s_sampler.enumerateDeals(public_state, static_cast<size_t>(n));
+        }
+        if (deals.empty())
+            deals = s_sampler.sampleDeals(public_state, n, true);
     }
-    if (deals.empty())
-        deals = s_sampler.sampleDeals(public_state, n, true);
     std::vector<rollout::World> worlds;
     worlds.reserve(deals.size());
     for (const auto& d : deals)
         worlds.push_back(d.hands);
     return worlds;
+}
+
+std::vector<rollout::World> sample_worlds(const ManilleGame& g, bool trump_rule_known, int n) {
+    return sample_worlds_impl(g, trump_rule_known, n, nullptr, 0.0, nullptr);
 }
 
 }  // namespace
@@ -460,6 +476,35 @@ int manille_mobile_sample_worlds(const ManilleMobileGame* game, int32_t trump_ru
                 out_initial[4 * i + p] = worlds[i][p] | played[p];
             }
         *out_n = static_cast<int32_t>(worlds.size());
+        return MANILLE_MOBILE_OK;
+    });
+}
+
+int manille_mobile_sample_worlds_belief(const ManilleMobileGame* game, int32_t trump_rule_known,
+                                        int32_t n_worlds, const float* belief, double belief_w,
+                                        int64_t* out_current, int64_t* out_initial,
+                                        int32_t* out_n, int32_t* out_belief_sampled) {
+    return guarded([&]() -> int {
+        if (game == nullptr || out_current == nullptr || out_initial == nullptr
+                || out_n == nullptr || n_worlds < 0)
+            return fail(MANILLE_MOBILE_INVALID_ARGUMENT, "Invalid world sampling request.");
+        const ManilleGame& g = game->game;
+        if (g.finished())
+            return fail(MANILLE_MOBILE_ILLEGAL_MOVE, "The deal is finished.");
+        bool belief_sampled = false;
+        auto worlds = sample_worlds_impl(g, trump_rule_known != 0, n_worlds, belief, belief_w,
+                                         &belief_sampled);
+        int64_t played[4] = {0, 0, 0, 0};
+        for (auto& sc : history_of(g))
+            played[sc.first] |= int64_t(1) << sc.second;
+        for (size_t i = 0; i < worlds.size(); ++i)
+            for (int p = 0; p < 4; ++p) {
+                out_current[4 * i + p] = worlds[i][p];
+                out_initial[4 * i + p] = worlds[i][p] | played[p];
+            }
+        *out_n = static_cast<int32_t>(worlds.size());
+        if (out_belief_sampled != nullptr)
+            *out_belief_sampled = belief_sampled ? 1 : 0;
         return MANILLE_MOBILE_OK;
     });
 }
@@ -547,6 +592,15 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
                                           int32_t n_worlds, const float* belief, const float* q,
                                           const double* extra, const ManilleFastNet* net,
                                           int32_t* out_card, double* out_values) {
+    return manille_mobile_rule_choose_worlds_net_ex(game, worlds, n_worlds, 0, belief, q, extra,
+                                                    net, out_card, out_values);
+}
+
+int manille_mobile_rule_choose_worlds_net_ex(const ManilleMobileGame* game, const int64_t* worlds,
+                                             int32_t n_worlds, int32_t worlds_belief_sampled,
+                                             const float* belief, const float* q,
+                                             const double* extra, const ManilleFastNet* net,
+                                             int32_t* out_card, double* out_values) {
     return guarded([&]() -> int {
         if (game == nullptr || out_card == nullptr || n_worlds < 0
                 || (n_worlds > 0 && worlds == nullptr))
@@ -559,6 +613,7 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
             for (int p = 0; p < 4; ++p)
                 ws[i][p] = worlds[4 * i + p];
         rule::Params params = deployed_params();
+        params.worlds_belief_sampled = worlds_belief_sampled != 0;
         if (net) {
             params.playout_net_plies = net->plies;
             params.playout_net_trick_end = net->trick_end;

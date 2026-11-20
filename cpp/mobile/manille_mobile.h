@@ -171,6 +171,24 @@ int manille_mobile_sample_worlds(
     int64_t* out_initial,
     int32_t* out_n
 );
+// Exact belief-weighted DP world sampling (UniformDealSampler::sampleDealsBelief):
+// draws worlds directly from P(W) proportional to prod (belief[rel(p), c] + 1e-9)^belief_w
+// when trump_rule_known == 0 and belief != NULL (falling back to exact enumeration when
+// few worlds remain, or to uniform/trump-constrained sampling otherwise). Sets
+// *out_belief_sampled = 1 iff worlds were drawn from the belief-weighted DP (so the
+// caller passes worlds_belief_sampled = 1 to manille_mobile_rule_choose_worlds_net_ex
+// to avoid double-counting belief).
+int manille_mobile_sample_worlds_belief(
+    const ManilleMobileGame* game,
+    int32_t trump_rule_known,
+    int32_t n_worlds,
+    const float* belief,
+    double belief_w,
+    int64_t* out_current,
+    int64_t* out_initial,
+    int32_t* out_n,
+    int32_t* out_belief_sampled
+);
 int manille_mobile_rule_choose_worlds(
     const ManilleMobileGame* game,
     const int64_t* worlds,
@@ -198,6 +216,18 @@ int manille_mobile_rule_choose_worlds_net(
     const ManilleMobileGame* game,
     const int64_t* worlds,
     int32_t n_worlds,
+    const float* belief,
+    const float* q,
+    const double* extra,
+    const ManilleFastNet* net,
+    int32_t* out_card,
+    double* out_values
+);
+int manille_mobile_rule_choose_worlds_net_ex(
+    const ManilleMobileGame* game,
+    const int64_t* worlds,
+    int32_t n_worlds,
+    int32_t worlds_belief_sampled,
     const float* belief,
     const float* q,
     const double* extra,

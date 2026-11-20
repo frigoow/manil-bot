@@ -157,6 +157,9 @@ struct Params {
     // <= 2): when >= 0 and trump >= 0, linearly tapers base_qw from trick 1
     // (hand size 8) to trick 7 (hand size 2)
     double suit_root_q_w_late = -1.0;
+    // true when `worlds` were already drawn from the exact belief-weighted DP
+    // (so worldWeights must not multiply by belief a second time)
+    bool worlds_belief_sampled = false;
 };
 
 struct Decision {

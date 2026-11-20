@@ -218,6 +218,7 @@ DEFAULTS = dict(
     playout_race_k=0,      # two-stage candidate racing Stage-1 world count (0 = off)
     playout_race_z=2.5,    # Stage-1 pruning z-bound in paired SEs
     suit_root_q_w_late=-1.0,  # late-deal Q blend weight on suit deals (< 0 = off)
+    worlds_belief_sampled=False,  # True when worlds were drawn from belief-weighted DP
     native=False,          # run the deploy path in C++ (cpp/rule_agent.cpp) when the
                            # params allow it (native_supported); nets stay in Python
 )
@@ -248,7 +249,7 @@ NATIVE_FIELDS = (
     'lik_belief_w lik_partner_eps lik_opp_eps root_q_w '
     'playout_sir lik_net_partner_w lik_net_opp_w lik_net_tau '
     'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z suit_net_z '
-    'playout_race_k playout_race_z suit_root_q_w_late').split()
+    'playout_race_k playout_race_z suit_root_q_w_late worlds_belief_sampled').split()
 
 
 class Knowledge:

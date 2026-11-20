@@ -293,9 +293,48 @@ Java_com_manille_jvm_NativeGame_nativeSampleWorlds(
     return output;
 }
 
+// [4 x n current hands, then 4 x n dealt hands, then 1 flag (1 = belief-sampled, 0 = not)].
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_manille_jvm_NativeGame_nativeSampleWorldsBelief(
+    JNIEnv* env, jclass, jlong handle, jboolean trump_rule_known, jint n_worlds,
+    jfloatArray belief, jdouble belief_w
+) {
+    if (n_worlds < 0)
+        n_worlds = 0;
+    std::array<float, 96> b{};
+    const float* bp = nullptr;
+    if (belief != nullptr) {
+        if (env->GetArrayLength(belief) != 96) {
+            jclass error_class = env->FindClass("java/lang/IllegalArgumentException");
+            if (error_class != nullptr)
+                env->ThrowNew(error_class, "belief must hold 3 x 32 floats");
+            return nullptr;
+        }
+        env->GetFloatArrayRegion(belief, 0, 96, b.data());
+        bp = b.data();
+    }
+    std::vector<int64_t> cur(4 * static_cast<size_t>(n_worlds)), init(cur.size());
+    int32_t n = 0;
+    int32_t belief_sampled = 0;
+    if (!check(manille_mobile_sample_worlds_belief(
+            game_from(handle), trump_rule_known ? 1 : 0, n_worlds, bp, belief_w,
+            cur.data(), init.data(), &n, &belief_sampled), env))
+        return nullptr;
+    jlongArray output = env->NewLongArray(8 * n + 1);
+    if (output != nullptr) {
+        if (n > 0) {
+            env->SetLongArrayRegion(output, 0, 4 * n, reinterpret_cast<const jlong*>(cur.data()));
+            env->SetLongArrayRegion(output, 4 * n, 4 * n, reinterpret_cast<const jlong*>(init.data()));
+        }
+        const jlong flag = belief_sampled ? 1 : 0;
+        env->SetLongArrayRegion(output, 8 * n, 1, &flag);
+    }
+    return output;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_manille_jvm_NativeGame_nativeRuleChooseWorlds(
-    JNIEnv* env, jclass, jlong handle, jlongArray worlds, jint n_worlds,
+    JNIEnv* env, jclass, jlong handle, jlongArray worlds, jint n_worlds, jboolean belief_sampled,
     jfloatArray belief, jfloatArray q, jdoubleArray extra, jdoubleArray out_values, jlong fast_net
 ) {
     auto fail_arg = [&](const char* message) {
@@ -332,9 +371,9 @@ Java_com_manille_jvm_NativeGame_nativeRuleChooseWorlds(
         return fail_arg("out_values must hold 32 doubles");
     int32_t card = -1;
     std::array<double, 32> values{};
-    if (!check(manille_mobile_rule_choose_worlds_net(
-            game_from(handle), w.data(), n_worlds, belief ? b.data() : nullptr,
-            q ? qv.data() : nullptr, extra ? ex.data() : nullptr,
+    if (!check(manille_mobile_rule_choose_worlds_net_ex(
+            game_from(handle), w.data(), n_worlds, belief_sampled ? 1 : 0,
+            belief ? b.data() : nullptr, q ? qv.data() : nullptr, extra ? ex.data() : nullptr,
             reinterpret_cast<const ManilleFastNet*>(fast_net), &card,
             out_values ? values.data() : nullptr), env))
         return -1;

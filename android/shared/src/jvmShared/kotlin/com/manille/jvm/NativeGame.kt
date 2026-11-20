@@ -31,6 +31,15 @@ class NativeGame() : Engine {
         return Worlds(n, raw.copyOfRange(0, 4 * n), raw.copyOfRange(4 * n, 8 * n))
     }
 
+    override fun sampleWorldsBelief(
+        trumpRuleKnown: Boolean, nWorlds: Int, belief: FloatArray, beliefWeight: Double,
+    ): Worlds {
+        val raw = nativeSampleWorldsBelief(requireHandle(), trumpRuleKnown, nWorlds, belief, beliefWeight)
+        val n = (raw.size - 1) / 8
+        val beliefSampled = raw.isNotEmpty() && raw[8 * n] != 0L
+        return Worlds(n, raw.copyOfRange(0, 4 * n), raw.copyOfRange(4 * n, 8 * n), beliefSampled)
+    }
+
     /**
      * Rule agent on given worlds; [extra] = optional log-weight per world.
      * [outValues] (32, by card) receives each legal card's play-out value
@@ -39,8 +48,8 @@ class NativeGame() : Engine {
     override fun ruleChooseWorlds(
         worlds: Worlds, belief: FloatArray?, q: FloatArray?, extra: DoubleArray?,
         outValues: DoubleArray?, fastNet: FastNet?,
-    ): Int = nativeRuleChooseWorlds(requireHandle(), worlds.current, worlds.n, belief, q, extra, outValues,
-        (fastNet as? NativeFastNet)?.handle ?: 0L)
+    ): Int = nativeRuleChooseWorlds(requireHandle(), worlds.current, worlds.n, worlds.beliefSampled,
+        belief, q, extra, outValues, (fastNet as? NativeFastNet)?.handle ?: 0L)
 
     override fun newDeal(dealer: Int, seed: Long, trump: Int?) {
         close()
@@ -140,9 +149,12 @@ class NativeGame() : Engine {
         @JvmStatic private external fun nativeSnapshot(handle: Long): IntArray
         @JvmStatic private external fun nativeRestore(snapshot: IntArray): Long
         @JvmStatic private external fun nativeSampleWorlds(handle: Long, trumpRuleKnown: Boolean, nWorlds: Int): LongArray
+        @JvmStatic private external fun nativeSampleWorldsBelief(
+            handle: Long, trumpRuleKnown: Boolean, nWorlds: Int, belief: FloatArray, beliefWeight: Double,
+        ): LongArray
         @JvmStatic private external fun nativeRuleChooseWorlds(
-            handle: Long, worlds: LongArray, nWorlds: Int, belief: FloatArray?, q: FloatArray?, extra: DoubleArray?,
-            outValues: DoubleArray?, fastNet: Long,
+            handle: Long, worlds: LongArray, nWorlds: Int, beliefSampled: Boolean, belief: FloatArray?,
+            q: FloatArray?, extra: DoubleArray?, outValues: DoubleArray?, fastNet: Long,
         ): Int
         /** The fast play-out net from its file (cpp/fast_policy.h); throws on a bad file. */
         @JvmStatic external fun nativeFastNetLoad(path: String): Long

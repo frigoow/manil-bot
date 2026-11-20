@@ -119,9 +119,9 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
         val key = netPlies to netTrickEnd
         val fastNet = if (!mull) (fastNetsSuit[key] ?: fastNets[key]) else fastNets[key]
         val nWorlds = if (fastNet != null) N_WORLDS_NET else N_WORLDS
-        val worlds = game.sampleWorlds(calls.trumpRuleKnown, nWorlds); lap(0)
         val nets = if (mull) mull() else null
         val belief = (nets?.first ?: beliefTrump).probabilities(game.observation(me)); lap(1)
+        val worlds = game.sampleWorldsBelief(calls.trumpRuleKnown, nWorlds, belief); lap(0)
         val scores = (nets?.second ?: trumpQ).scoreCards(
             game.gruRaw(me), game.gruLength(me), game.gruGlobal(me), game.actionFeatures(me), legal)
         val q = FloatArray(32)
@@ -215,8 +215,8 @@ class RuleBot(private val platform: Platform, private val trumpQ: QModel, privat
 
     companion object {
         const val N_WORLDS = 400
-        /** Sampled worlds when the fast play-out net is enabled (SIR + two-stage racing up to 1536). */
-        const val N_WORLDS_NET = 1600
+        /** Sampled worlds when the fast play-out net is enabled (exact belief-weighted DP + SIR + racing). */
+        const val N_WORLDS_NET = 1000
         /**
          * Hand the play-out over to the rule policy on a trick boundary: the
          * net finishes the trick its plies end in, so "1 trick" = 4 plies
