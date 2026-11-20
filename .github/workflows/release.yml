@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  MODELS_TAG: models-v1
+  MODELS_TAG: models-v2
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:

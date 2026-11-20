@@ -28,7 +28,7 @@ permissions:
   contents: write
 
 env:
-  MODELS_TAG: models-v1
+  MODELS_TAG: models-v2
 
 jobs:
   package:
