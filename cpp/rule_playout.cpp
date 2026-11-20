@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <tuple>
 #include "bitops.h"
+#include "parallel.h"
 
 namespace rollout {
 namespace {
@@ -711,39 +712,41 @@ std::vector<std::vector<double>> evaluate_candidates(
     const NetChoose* net, int net_plies, bool net_to_trick_end) {
     std::vector<std::vector<double>> out(candidates.size(),
                                          std::vector<double>(worlds.size(), 0.0));
-    for (size_t wi = 0; wi < worlds.size(); ++wi) {
-        Replayed base{freshGame(startHands(worlds[wi], history), trump, declarer),
-                      Policy(trump, declarer, opt), {}};
-        base.game.startPlaying();
-        for (auto& sc : history)
-            play(base, sc.first, sc.second);
-        for (size_t ci = 0; ci < candidates.size(); ++ci) {
-            Replayed r = base;
-            play(r, me, candidates[ci]);
-            int ply = 0;
-            // once the net hands over it stays off: the trick test would
-            // otherwise switch it back on at the next trick's second card
-            bool net_on = net && net_plies > 0;
-            while (!r.game.finished()) {
-                int seat = static_cast<int>(r.game.currentPlayer());
-                net_on = net_on && (ply < net_plies || (net_to_trick_end && !r.trick.empty()));
-                int c;
-                if (net_on) {
-                    const int64_t hm = r.game.handMask(seat);
-                    if ((hm & (hm - 1)) == 0)
-                        c = manille::ctz64(static_cast<unsigned long long>(hm));
-                    else
-                        c = (*net)(r.game, seat);
-                } else {
-                    std::vector<int> legal = legalOf(r.game);
-                    c = r.policy.choose(seat, legal, handsOf(r.game), r.trick);
+    manille_parallel::parallel_for(worlds.size(), 16, [&](size_t b, size_t e) {
+        for (size_t wi = b; wi < e; ++wi) {
+            Replayed base{freshGame(startHands(worlds[wi], history), trump, declarer),
+                          Policy(trump, declarer, opt), {}};
+            base.game.startPlaying();
+            for (auto& sc : history)
+                play(base, sc.first, sc.second);
+            for (size_t ci = 0; ci < candidates.size(); ++ci) {
+                Replayed r = base;
+                play(r, me, candidates[ci]);
+                int ply = 0;
+                // once the net hands over it stays off: the trick test would
+                // otherwise switch it back on at the next trick's second card
+                bool net_on = net && net_plies > 0;
+                while (!r.game.finished()) {
+                    int seat = static_cast<int>(r.game.currentPlayer());
+                    net_on = net_on && (ply < net_plies || (net_to_trick_end && !r.trick.empty()));
+                    int c;
+                    if (net_on) {
+                        const int64_t hm = r.game.handMask(seat);
+                        if ((hm & (hm - 1)) == 0)
+                            c = manille::ctz64(static_cast<unsigned long long>(hm));
+                        else
+                            c = (*net)(r.game, seat);
+                    } else {
+                        std::vector<int> legal = legalOf(r.game);
+                        c = r.policy.choose(seat, legal, handsOf(r.game), r.trick);
+                    }
+                    play(r, seat, c);
+                    ++ply;
                 }
-                play(r, seat, c);
-                ++ply;
+                out[ci][wi] = r.game.teamPoints(me % 2);
             }
-            out[ci][wi] = r.game.teamPoints(me % 2);
         }
-    }
+    });
     return out;
 }
 
@@ -1029,7 +1032,6 @@ std::vector<std::vector<double>> evaluate_endgame(
     const ManilleGame& game, int me,
     const std::vector<int>& candidates,
     const std::vector<World>& worlds) {
-    thread_local EndgameSolver solver;
     std::vector<std::vector<double>> out(candidates.size(),
                                          std::vector<double>(worlds.size(), 0.0));
     const int trump = game.trumpSuit();
@@ -1059,57 +1061,68 @@ std::vector<std::vector<double>> evaluate_endgame(
         return worlds[a] < worlds[b];
     });
 
-    const bool my_team0 = (me % 2 == 0);
+    std::vector<std::pair<size_t, size_t>> groups;
+    groups.reserve(order.size());
     for (size_t oi = 0; oi < order.size(); ) {
-        const size_t first_wi = order[oi];
-        const World& w = worlds[first_wi];
+        const World& w = worlds[order[oi]];
         size_t oj = oi + 1;
         while (oj < order.size() && worlds[order[oj]] == w) ++oj;
-
-        uint32_t h[4] = {
-            static_cast<uint32_t>(w[0]), static_cast<uint32_t>(w[1]),
-            static_cast<uint32_t>(w[2]), static_cast<uint32_t>(w[3])
-        };
-        int rem_pts = base_tpts;
-        uint32_t all_cards = h[0] | h[1] | h[2] | h[3];
-        while (all_cards) {
-            const int c = manille::ctz64(all_cards);
-            all_cards &= all_cards - 1u;
-            rem_pts += PTS[c & 7];
-        }
-
-        solver.newWorld(trump);
-        for (size_t ci = 0; ci < candidates.size(); ++ci) {
-            const int c = candidates[ci];
-            h[me] ^= (1u << c);
-            const int nt = n_trick + 1;
-            const int n_led = (n_trick == 0) ? (c >> 3) : led;
-            int n_wc = w_card, n_wp = w_player;
-            if (n_trick == 0 || beatsCard(c, w_card, trump)) {
-                n_wc = c;
-                n_wp = me;
-            }
-            const int n_tpts = base_tpts + PTS[c & 7];
-            int pts0_rem;
-            if (nt == 4) {
-                const int gain = (n_wp & 1) == 0 ? n_tpts : 0;
-                const int next_rem = rem_pts - n_tpts;
-                if (next_rem == 0 || (h[0] | h[1] | h[2] | h[3]) == 0)
-                    pts0_rem = gain;
-                else
-                    pts0_rem = gain + solver.ab(h, n_wp, 0, 0, -1, -1, 0, next_rem, -1, next_rem + 1);
-            } else {
-                pts0_rem = solver.ab(h, (me + 1) & 3, nt, n_led, n_wc, n_wp, n_tpts, rem_pts,
-                                     -1, rem_pts + 1);
-            }
-            h[me] ^= (1u << c);
-            const int final_pts0 = base_pts0 + pts0_rem;
-            const double team_pts = my_team0 ? double(final_pts0) : double(60 - final_pts0);
-            for (size_t k = oi; k < oj; ++k)
-                out[ci][order[k]] = team_pts;
-        }
+        groups.emplace_back(oi, oj);
         oi = oj;
     }
+
+    const bool my_team0 = (me % 2 == 0);
+    manille_parallel::parallel_for(groups.size(), 16, [&](size_t b, size_t e) {
+        thread_local EndgameSolver solver;
+        for (size_t gi = b; gi < e; ++gi) {
+            const size_t oi = groups[gi].first;
+            const size_t oj = groups[gi].second;
+            const World& w = worlds[order[oi]];
+
+            uint32_t h[4] = {
+                static_cast<uint32_t>(w[0]), static_cast<uint32_t>(w[1]),
+                static_cast<uint32_t>(w[2]), static_cast<uint32_t>(w[3])
+            };
+            int rem_pts = base_tpts;
+            uint32_t all_cards = h[0] | h[1] | h[2] | h[3];
+            while (all_cards) {
+                const int c = manille::ctz64(all_cards);
+                all_cards &= all_cards - 1u;
+                rem_pts += PTS[c & 7];
+            }
+
+            solver.newWorld(trump);
+            for (size_t ci = 0; ci < candidates.size(); ++ci) {
+                const int c = candidates[ci];
+                h[me] ^= (1u << c);
+                const int nt = n_trick + 1;
+                const int n_led = (n_trick == 0) ? (c >> 3) : led;
+                int n_wc = w_card, n_wp = w_player;
+                if (n_trick == 0 || beatsCard(c, w_card, trump)) {
+                    n_wc = c;
+                    n_wp = me;
+                }
+                const int n_tpts = base_tpts + PTS[c & 7];
+                int pts0_rem;
+                if (nt == 4) {
+                    const int gain = (n_wp & 1) == 0 ? n_tpts : 0;
+                    const int next_rem = rem_pts - n_tpts;
+                    if (next_rem == 0 || (h[0] | h[1] | h[2] | h[3]) == 0)
+                        pts0_rem = gain;
+                    else
+                        pts0_rem = gain + solver.ab(h, n_wp, 0, 0, -1, -1, 0, next_rem, -1, next_rem + 1);
+                } else {
+                    pts0_rem = solver.ab(h, (me + 1) & 3, nt, n_led, n_wc, n_wp, n_tpts, rem_pts,
+                                         -1, rem_pts + 1);
+                }
+                h[me] ^= (1u << c);
+                const int final_pts0 = base_pts0 + pts0_rem;
+                const double team_pts = my_team0 ? double(final_pts0) : double(60 - final_pts0);
+                for (size_t k = oi; k < oj; ++k)
+                    out[ci][order[k]] = team_pts;
+            }
+        }
+    });
     return out;
 }
 

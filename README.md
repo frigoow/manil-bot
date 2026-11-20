@@ -68,7 +68,7 @@ Every move, for whichever bot is to play:
 1. **Track** what is public: the cards played, who showed out of which suit,
    the calls.
 2. **Sample worlds**: 400 deals of the hidden cards consistent with everything
-   seen so far on *Standard* (800 when the fast play-out net is enabled, or
+   seen so far on *Standard* (1600 when the fast play-out net is enabled, or
    exact enumeration late in the deal when all consistent worlds fit). Each is
    weighted by a **belief network** (which seat holds which unseen card) and by
    play-history likelihood (the fast net's honest card probabilities on trump
@@ -78,17 +78,20 @@ Every move, for whichever bot is to play:
 3. **Rule tiers** propose a card: cash winners, keep the partner's trick, don't
    feed the opponents' trick, lead the suit that develops tricks -- with a
    separate rule set for no-trump play.
-4. **Play-out**: for every legal card, each world is played to the end of the
-   deal by a fast rule or learned policy (or solved exactly by double-dummy
-   alpha-beta in the last 3 tricks of a mull deal), giving the expected final
-   score of every card.
+4. **Play-out**: across up to 4 CPU cores in parallel, each world is played to
+   the end of the deal by a fast rule or learned policy (with two-stage
+   candidate racing pruning clearly dominated moves after 192 worlds, or solved
+   exactly by double-dummy alpha-beta in the last 4 tricks of a mull deal),
+   giving the expected final score of every card.
 5. **Blend** each card's play-out value with a learned **Q-network** (60/40,
-   85/15 in the exact mull endgame), and overrule the tiers' proposal only when
-   the paired evidence across worlds clears a z-test.
+   tapering to 85/15 late in a trump deal and in the exact mull endgame), and
+   overrule the tiers' proposal only when the paired evidence across worlds
+   clears a z-test.
 
-Sampling, knock weighting and play-out take about 8 ms/move on *Standard*
-(2.4 ms on undoubled deals) and 50 ms/move on *Whole deal* (39 ms undoubled) on
-one desktop CPU core -- well under a tenth of a second even on *Whole deal*.
+Sampling, knock weighting and play-out take about 7 ms/move on *Standard*
+(1.4 ms on undoubled deals) and 42 ms/move on *Whole deal* (17 ms undoubled) on
+a desktop CPU -- well under a tenth of a second even on *Whole deal* with 1600
+worlds.
 
 The calls -- trump or mull, knock, knock back -- come from a separate
 **decision layer**. It plays for the *match*, not for the points of one deal:

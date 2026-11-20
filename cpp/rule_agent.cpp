@@ -1310,12 +1310,13 @@ Decision choose(const ManilleGame& game, int me, int dealer,
         const bool net_whole = has_net && ((P.playout_net_plies >= 32)
                                            || (P.playout_net_plies == 0 && P.playout_net_mix >= 1.0));
         const bool hybrid = has_net && P.playout_net_plies > 0 && !net_whole;
-        std::vector<std::vector<double>> per;
-        if (use_ab) {
-            per = rollout::evaluate_endgame(game, me, k.legal, wabs);
-        } else if (net_whole) {
-            per = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, k.legal, wabs, history);
-        } else {
+
+        auto run_playout = [&](const std::vector<int>& cands,
+                               const std::vector<rollout::World>& ws_sub) {
+            if (use_ab)
+                return rollout::evaluate_endgame(game, me, cands, ws_sub);
+            if (net_whole)
+                return fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, cands, ws_sub, history);
             rollout::Options opt;
             opt.honest = 0;
             opt.agent_like = true;
@@ -1324,44 +1325,32 @@ Decision choose(const ManilleGame& game, int me, int dealer,
             rollout::NetChoose net_choose = [net](const ManilleGame& g, int seat) {
                 return fastpolicy::choose(*net, g, seat);
             };
-            per = rollout::evaluate_candidates(k.trump, dealer, me, k.legal, wabs, history, opt,
-                                               hybrid ? &net_choose : nullptr,
-                                               P.playout_net_plies, P.playout_net_trick_end);
+            auto res = rollout::evaluate_candidates(k.trump, dealer, me, cands, ws_sub, history, opt,
+                                                    hybrid ? &net_choose : nullptr,
+                                                    P.playout_net_plies, P.playout_net_trick_end);
             if (!hybrid && has_net && P.playout_net_mix > 0) {
-                auto pn = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, k.legal,
-                                                          wabs, history);
+                auto pn = fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, cands,
+                                                          ws_sub, history);
                 const double nm = P.playout_net_mix;
-                for (size_t ci = 0; ci < per.size(); ++ci)
-                    for (size_t i = 0; i < per[ci].size(); ++i)
-                        per[ci][i] = (1 - nm) * per[ci][i] + nm * pn[ci][i];
+                for (size_t ci = 0; ci < res.size(); ++ci)
+                    for (size_t i = 0; i < res[ci].size(); ++i)
+                        res[ci][i] = (1 - nm) * res[ci][i] + nm * pn[ci][i];
             }
-        }
+            return res;
+        };
 
-        const double base_qw = mull && P.mull_root_q_w >= 0 ? P.mull_root_q_w : P.root_q_w;
+        double base_qw = mull && P.mull_root_q_w >= 0 ? P.mull_root_q_w : P.root_q_w;
+        if (!mull && P.suit_root_q_w_late >= 0 && !use_ab) {
+            // Linearly taper from hand size 8 (trick 1) to hand size 2 (trick 7)
+            const double t = std::clamp((8.0 - double(k.hand.size())) / 6.0, 0.0, 1.0);
+            base_qw = base_qw + t * (P.suit_root_q_w_late - base_qw);
+        }
         const double qw = (use_ab && P.mull_endgame_q_w >= 0) ? P.mull_endgame_q_w : base_qw;
-        if (qw > 0 && q) {
-            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
-                const double qv = 30.0 * double(q[k.legal[ci]]) + 30.0;
-                for (auto& v : per[ci])
-                    v = (1 - qw) * v + qw * qv;
-            }
-        }
-        std::vector<double> vals(k.legal.size(), 0.0);
-        for (size_t ci = 0; ci < k.legal.size(); ++ci) {
-            double s = 0.0;
-            for (size_t i = 0; i < n; ++i)
-                s += wts[i] * per[ci][i];
-            vals[ci] = s;
-        }
-        d.value_cards = k.legal;
-        d.values = vals;
-        // late in a mull the play-out undervalues cashing: only another
-        // master may replace a "cash master" lead
+
+        // Precompute lock / def_trump penalties so racing uses the exact same objective.
         const bool lock = P.nt_lock_cash_from_trick > 0 && k.trump < 0 && k.trick.empty()
             && d.why.rfind("plan: cash master", 0) == 0
             && 9 - static_cast<int>(k.hand.size()) >= P.nt_lock_cash_from_trick;
-        // defenders leading a small trump from a weak holding was the
-        // play-out's doing, twice the blueprint's rate at trick 1
         int my_tr = 0, my_tr_pts = 0;
         for (int c : k.hand)
             if (suitOf(c) == k.trump) {
@@ -1372,16 +1361,155 @@ Decision choose(const ManilleGame& game, int me, int dealer,
             && k.trick.empty() && k.declarer != 0 && k.declarer != 2 && suitOf(choice) != k.trump
             && (!P.def_trump_lock_weak || (my_tr <= 2 && my_tr_pts <= 3));
         const bool def_lock = def_case && P.def_trump_lock;
-        // the margin a trump lead must clear (penalty on its value)
         const double def_pen = def_case && !def_lock ? P.def_trump_margin : 0.0;
+
+        size_t ci_choice = 0;
+        for (size_t ci = 0; ci < k.legal.size(); ++ci)
+            if (k.legal[ci] == choice)
+                ci_choice = ci;
+
+        std::vector<std::vector<double>> per;
+        std::vector<double> vals(k.legal.size(), 0.0);
+        std::vector<bool> active_cand(k.legal.size(), true);
+
+        const bool do_race = P.playout_race_k > 0 && !use_ab && k.legal.size() > 2
+            && n > static_cast<size_t>(P.playout_race_k);
+
+        if (do_race) {
+            // Deterministic unbiased permutation of wabs so Stage 1 is a uniform subsample
+            std::vector<size_t> perm(n);
+            for (size_t i = 0; i < n; ++i) perm[i] = i;
+            auto h64 = [](size_t x) -> uint64_t {
+                uint64_t z = (static_cast<uint64_t>(x) + 1ULL) * 0x9e3779b97f4a7c15ULL;
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+                return z ^ (z >> 31);
+            };
+            std::sort(perm.begin(), perm.end(), [&](size_t a, size_t b) { return h64(a) < h64(b); });
+            std::vector<rollout::World> pwabs(n);
+            std::vector<double> pwts(n);
+            std::vector<int> pmults;
+            if (!mults.empty()) pmults.resize(n);
+            for (size_t i = 0; i < n; ++i) {
+                pwabs[i] = wabs[perm[i]];
+                pwts[i] = wts[perm[i]];
+                if (!mults.empty()) pmults[i] = mults[perm[i]];
+            }
+            wabs.swap(pwabs);
+            wts.swap(pwts);
+            if (!mults.empty()) mults.swap(pmults);
+
+            const size_t k0 = static_cast<size_t>(P.playout_race_k);
+            std::vector<rollout::World> w1(wabs.begin(), wabs.begin() + k0);
+            auto per1 = run_playout(k.legal, w1);
+            if (qw > 0 && q) {
+                for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                    const double qv = 30.0 * double(q[k.legal[ci]]) + 30.0;
+                    for (auto& v : per1[ci])
+                        v = (1 - qw) * v + qw * qv;
+                }
+            }
+            double sw1 = 0.0, sww1 = 0.0;
+            for (size_t i = 0; i < k0; ++i) {
+                sw1 += wts[i];
+                sww1 += wts[i] * wts[i];
+            }
+            const double inv_sw1 = sw1 > 0.0 ? 1.0 / sw1 : 1.0;
+            const double neff1 = sww1 > 0.0 ? (sw1 * sw1) / sww1 : double(k0);
+            std::vector<double> v1(k.legal.size(), 0.0);
+            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                double s = 0.0;
+                for (size_t i = 0; i < k0; ++i)
+                    s += wts[i] * per1[ci][i];
+                v1[ci] = s * inv_sw1;
+            }
+            auto adj1 = [&](size_t ci) {
+                return v1[ci] - (suitOf(k.legal[ci]) == k.trump ? def_pen : 0.0);
+            };
+            size_t best1 = ci_choice;
+            bool have_b1 = false;
+            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                if (lock && k.legal[ci] != choice && !k.is_master(k.legal[ci])) continue;
+                if (def_lock && suitOf(k.legal[ci]) == k.trump) continue;
+                if (!have_b1 || adj1(ci) > adj1(best1)) {
+                    best1 = ci;
+                    have_b1 = true;
+                }
+            }
+            std::vector<size_t> surv_idx;
+            std::vector<int> surv_cards;
+            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                bool keep = (ci == ci_choice || ci == best1);
+                if (!keep) {
+                    const bool elig = !(lock && k.legal[ci] != choice && !k.is_master(k.legal[ci]))
+                                   && !(def_lock && suitOf(k.legal[ci]) == k.trump);
+                    if (elig) {
+                        const double gap = adj1(best1) - adj1(ci);
+                        double mean_d = 0.0;
+                        for (size_t i = 0; i < k0; ++i)
+                            mean_d += (wts[i] * inv_sw1) * (per1[best1][i] - per1[ci][i]);
+                        double var_d = 0.0;
+                        for (size_t i = 0; i < k0; ++i) {
+                            const double e = (per1[best1][i] - per1[ci][i]) - mean_d;
+                            var_d += (wts[i] * inv_sw1) * e * e;
+                        }
+                        const double se_d = std::sqrt(std::max(var_d, 1e-12) / neff1);
+                        if (gap <= P.playout_race_z * se_d)
+                            keep = true;
+                    }
+                }
+                if (keep) {
+                    surv_idx.push_back(ci);
+                    surv_cards.push_back(k.legal[ci]);
+                } else {
+                    active_cand[ci] = false;
+                    vals[ci] = v1[ci];
+                }
+            }
+            std::vector<rollout::World> w2(wabs.begin() + k0, wabs.end());
+            auto per2 = run_playout(surv_cards, w2);
+            per.resize(k.legal.size());
+            for (size_t si = 0; si < surv_idx.size(); ++si) {
+                const size_t ci = surv_idx[si];
+                if (qw > 0 && q) {
+                    const double qv = 30.0 * double(q[k.legal[ci]]) + 30.0;
+                    for (auto& v : per2[si])
+                        v = (1 - qw) * v + qw * qv;
+                }
+                per[ci].resize(n);
+                std::copy(per1[ci].begin(), per1[ci].end(), per[ci].begin());
+                std::copy(per2[si].begin(), per2[si].end(), per[ci].begin() + k0);
+                double s = 0.0;
+                for (size_t i = 0; i < n; ++i)
+                    s += wts[i] * per[ci][i];
+                vals[ci] = s;
+            }
+        } else {
+            per = run_playout(k.legal, wabs);
+            if (qw > 0 && q) {
+                for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                    const double qv = 30.0 * double(q[k.legal[ci]]) + 30.0;
+                    for (auto& v : per[ci])
+                        v = (1 - qw) * v + qw * qv;
+                }
+            }
+            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                double s = 0.0;
+                for (size_t i = 0; i < n; ++i)
+                    s += wts[i] * per[ci][i];
+                vals[ci] = s;
+            }
+        }
+        d.value_cards = k.legal;
+        d.values = vals;
         auto adj = [&](size_t ci) {
             return vals[ci] - (suitOf(k.legal[ci]) == k.trump ? def_pen : 0.0);
         };
-        size_t bi = 0, ci_choice = 0;
+        size_t bi = 0;
         bool have_bi = false;
         for (size_t ci = 0; ci < vals.size(); ++ci) {
-            if (k.legal[ci] == choice)
-                ci_choice = ci;
+            if (!active_cand[ci])
+                continue;
             if (lock && k.legal[ci] != choice && !k.is_master(k.legal[ci]))
                 continue;
             if (def_lock && suitOf(k.legal[ci]) == k.trump)

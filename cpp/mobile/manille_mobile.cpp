@@ -528,7 +528,7 @@ static rule::Params deployed_params() {
     params.lik_net_partner_w = 0.45;
     params.lik_net_opp_w = 0.30;
     params.lik_net_tau = 1.0;
-    params.mull_endgame_ab_cards = 3;
+    params.mull_endgame_ab_cards = 4;
     params.mull_endgame_q_w = 0.15;
     params.mull_endgame_z = 0.0;
     params.suit_net_z = 0.5;
@@ -562,7 +562,10 @@ int manille_mobile_rule_choose_worlds_net(const ManilleMobileGame* game, const i
         if (net) {
             params.playout_net_plies = net->plies;
             params.playout_net_trick_end = net->trick_end;
-            params.playout_worlds = 768;
+            params.playout_worlds = 1536;
+            params.playout_race_k = 192;
+            params.playout_race_z = 2.5;
+            params.suit_root_q_w_late = 0.15;
         }
         rule::Decision d = rule::choose(g, static_cast<int>(g.currentPlayer()), g.declarer(),
                                         ws, history_of(g), belief, q, params, extra,
