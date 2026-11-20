@@ -64,7 +64,7 @@ class ProfileStore(private val storage: Storage) {
     var fourColor: Boolean = true; private set
     var smileys: Boolean = true; private set
     var animations: Boolean = true; private set
-    var netPlies: Int = 0; private set
+    var netPlies: Int = RuleBot.WHOLE_DEAL; private set
     /** "nl" (the default) or "en"; only an explicit choice in the lobby or menu overrides Dutch. */
     var language: String = "nl"; private set
     private var languageChosen = false
@@ -91,7 +91,7 @@ class ProfileStore(private val storage: Storage) {
         fourColor = j.optBoolean("fourColor", true)
         smileys = j.optBoolean("smileys", true)
         animations = j.optBoolean("animations", true)
-        netPlies = j.optInt("netPlies", 0)
+        netPlies = j.optInt("netPlies", RuleBot.WHOLE_DEAL)
         languageChosen = j.optBoolean("languageChosen", false)
         language = if (languageChosen) j.optString("language", "nl") else "nl"
         theme = j.optString("theme", "cafe")

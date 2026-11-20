@@ -55,7 +55,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
         RuleBot(platform, bot ?: error("QGRU model missing"), announceNet)
     }
     private val ruleBot = ruleResult.getOrNull().also {
-        it?.netPlies = profileStore.netPlies.takeIf { p -> p in RuleBot.PLY_CHOICES } ?: 0
+        it?.netPlies = profileStore.netPlies.takeIf { p -> p in RuleBot.PLY_CHOICES } ?: RuleBot.WHOLE_DEAL
         ruleResult.exceptionOrNull()?.let { e ->
             platform.log("rule agent unavailable, bots play the QGRU: ${e.message}")
         }
@@ -119,7 +119,7 @@ class GameController(private val platform: Platform) : AutoCloseable {
     var smileys by mutableStateOf(profileStore.smileys); private set
     var animations by mutableStateOf(profileStore.animations); private set
     /** Play-out net plies for the bots (RuleBot.PLY_CHOICES); 0 = rule play-out alone. */
-    var netPlies by mutableStateOf(profileStore.netPlies.takeIf { it in RuleBot.PLY_CHOICES } ?: 0); private set
+    var netPlies by mutableStateOf(profileStore.netPlies.takeIf { it in RuleBot.PLY_CHOICES } ?: RuleBot.WHOLE_DEAL); private set
     /** The bots' thinking time over their recent real decisions (ms), or null before any. */
     var botMsMean by mutableStateOf<Long?>(null); private set
     var botMsMax by mutableStateOf<Long?>(null); private set
