@@ -1,6 +1,8 @@
 #include "sampler/uniform.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -139,6 +141,163 @@ std::vector<Deal> UniformDealSampler::sampleDeals(
             deal.hands[partner] = public_state.partner_hand;
         remaining = problem.remaining;
         sampleAssignments(problem, 0, remaining, memo, deal.hands);
+        out.push_back(deal);
+    }
+    return out;
+}
+
+std::vector<Deal> UniformDealSampler::sampleDealsBelief(
+    const PublicState& public_state,
+    int n,
+    const float* belief,
+    double belief_w,
+    bool enumerate_if_small,
+    bool* out_enumerated
+) const {
+    if (out_enumerated)
+        *out_enumerated = false;
+    if (n <= 0)
+        return {};
+    if (belief == nullptr || belief_w <= 0.0) {
+        auto deals = sampleDeals(public_state, n, enumerate_if_small);
+        if (out_enumerated && enumerate_if_small && static_cast<int>(deals.size()) < n)
+            *out_enumerated = true;
+        return deals;
+    }
+
+    SamplingProblem problem = buildProblem(public_state);
+    const int M = static_cast<int>(problem.domains.size());
+    const int obs = public_state.observer;
+    const int partner = (obs + 2) % 4;
+
+    if (enumerate_if_small && M <= 12) {
+        std::unordered_map<uint64_t, uint64_t> memo;
+        memo.reserve(static_cast<size_t>(M + 1) * 64);
+        std::array<int, 4> rem = problem.remaining;
+        const uint64_t cnt = countAssignments(problem, 0, rem, memo);
+        if (cnt == 0)
+            throw std::runtime_error("UniformDealSampler: public state has no feasible hidden-card assignment.");
+        if (cnt <= static_cast<uint64_t>(n)) {
+            std::vector<Deal> out;
+            out.reserve(static_cast<size_t>(cnt));
+            std::array<int64_t, 4> hands{0, 0, 0, 0};
+            hands[obs] = public_state.observer_hand;
+            if (public_state.partner_hand != 0)
+                hands[partner] = public_state.partner_hand;
+            rem = problem.remaining;
+            enumerateAssignments(problem, 0, rem, memo, hands, out);
+            if (out_enumerated)
+                *out_enumerated = true;
+            return out;
+        }
+    }
+
+    const int s0 = (obs + 1) % 4;
+    const int s1 = (obs + 2) % 4;
+    const int s2 = (obs + 3) % 4;
+    const int R0 = problem.remaining[s0];
+    const int R1 = problem.remaining[s1];
+    const int R2 = problem.remaining[s2];
+    if (M > 24 || R0 > 8 || R1 > 8 || R2 > 8 || R0 + R1 + R2 != M)
+        return sampleDeals(public_state, n, enumerate_if_small);
+
+    // Precompute normalized per-card weights for exact belief-weighted DP.
+    double cw[24][3]{};
+    for (int idx = 0; idx < M; ++idx) {
+        const CardDomain& dom = problem.domains[idx];
+        double mx = 0.0;
+        for (int k = 0; k < dom.count; ++k) {
+            const int p = dom.players[k];
+            const int rel = ((p - obs) % 4 + 4) % 4 - 1;  // 0, 1, 2
+            const double w = std::pow(double(belief[rel * 32 + dom.card]) + 1e-9, belief_w);
+            cw[idx][k] = w;
+            if (w > mx) mx = w;
+        }
+        if (mx > 0.0) {
+            for (int k = 0; k < dom.count; ++k)
+                cw[idx][k] /= mx;
+        }
+    }
+
+    // Bottom-up weighted DP: dp[idx][r0][r1] = partition function for domains[idx..M-1]
+    // with remaining counts (r0, r1, r2 = (M - idx) - r0 - r1).
+    double dp[25][9][9];
+    std::memset(dp, 0, sizeof(dp));
+    dp[M][0][0] = 1.0;
+
+    for (int idx = M - 1; idx >= 0; --idx) {
+        const CardDomain& dom = problem.domains[idx];
+        const int rem_cards = M - idx;
+        const int r0_max = std::min(R0, rem_cards);
+        for (int r0 = 0; r0 <= r0_max; ++r0) {
+            const int r1_max = std::min(R1, rem_cards - r0);
+            const int r1_min = std::max(0, rem_cards - r0 - R2);
+            for (int r1 = r1_min; r1 <= r1_max; ++r1) {
+                const int r2 = rem_cards - r0 - r1;
+                double acc = 0.0;
+                for (int k = 0; k < dom.count; ++k) {
+                    const int p = dom.players[k];
+                    double child = 0.0;
+                    if (p == s0) {
+                        if (r0 > 0) child = dp[idx + 1][r0 - 1][r1];
+                    } else if (p == s1) {
+                        if (r1 > 0) child = dp[idx + 1][r0][r1 - 1];
+                    } else {
+                        if (r2 > 0) child = dp[idx + 1][r0][r1];
+                    }
+                    acc += cw[idx][k] * child;
+                }
+                dp[idx][r0][r1] = acc;
+            }
+        }
+    }
+
+    if (!(dp[0][R0][R1] > 0.0))
+        throw std::runtime_error("UniformDealSampler: public state has no feasible hidden-card assignment.");
+
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    auto& rng = prng();
+    std::vector<Deal> out;
+    out.reserve(static_cast<size_t>(n));
+
+    for (int i = 0; i < n; ++i) {
+        Deal deal;
+        deal.hands.fill(0);
+        deal.hands[obs] = public_state.observer_hand;
+        if (public_state.partner_hand != 0)
+            deal.hands[partner] = public_state.partner_hand;
+        int r0 = R0, r1 = R1, r2 = R2;
+        for (int idx = 0; idx < M; ++idx) {
+            const CardDomain& dom = problem.domains[idx];
+            double w[3] = {0.0, 0.0, 0.0};
+            double tot = 0.0;
+            for (int k = 0; k < dom.count; ++k) {
+                const int p = dom.players[k];
+                double child = 0.0;
+                if (p == s0) {
+                    if (r0 > 0) child = dp[idx + 1][r0 - 1][r1];
+                } else if (p == s1) {
+                    if (r1 > 0) child = dp[idx + 1][r0][r1 - 1];
+                } else {
+                    if (r2 > 0) child = dp[idx + 1][r0][r1];
+                }
+                w[k] = cw[idx][k] * child;
+                tot += w[k];
+            }
+            double target = u01(rng) * tot;
+            int chosen_k = dom.count - 1;
+            for (int k = 0; k < dom.count; ++k) {
+                if (w[k] <= 0.0) continue;
+                chosen_k = k;
+                if (target < w[k]) break;
+                target -= w[k];
+            }
+            const int p = dom.players[chosen_k];
+            deal.hands[p] |= int64_t(1) << dom.card;
+            if (p == s0) --r0;
+            else if (p == s1) --r1;
+            else --r2;
+        }
         out.push_back(deal);
     }
     return out;
