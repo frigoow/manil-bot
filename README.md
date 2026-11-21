@@ -68,13 +68,13 @@ Every move, for whichever bot is to play:
 1. **Track** what is public: the cards played, who showed out of which suit,
    the calls.
 2. **Sample worlds**: 400 deals of the hidden cards consistent with everything
-   seen so far on *Standard* (1600 when the fast play-out net is enabled, or
-   exact enumeration late in the deal when all consistent worlds fit). Each is
-   weighted by a **belief network** (which seat holds which unseen card) and by
-   play-history likelihood (the fast net's honest card probabilities on trump
-   deals, rule-policy mismatches otherwise). After a knock, worlds are
-   reweighted by how likely each hand was to make that call, then deduplicated
-   and stratified-resampled before play-out.
+   seen so far on *Standard* (1000 drawn directly from the **belief network**
+   via exact bottom-up weighted DP when the fast play-out net is enabled, or
+   exact enumeration late in the deal when all consistent worlds fit). Worlds
+   are weighted by play-history likelihood (the fast net's honest card
+   probabilities on trump deals, rule-policy mismatches otherwise) and, after a
+   knock, by how likely each hand was to make that call, then deduplicated and
+   stratified-resampled before play-out.
 3. **Rule tiers** propose a card: cash winners, keep the partner's trick, don't
    feed the opponents' trick, lead the suit that develops tricks -- with a
    separate rule set for no-trump play.
@@ -89,9 +89,10 @@ Every move, for whichever bot is to play:
    clears a z-test.
 
 Sampling, knock weighting and play-out take about 7 ms/move on *Standard*
-(1.4 ms on undoubled deals) and 42 ms/move on *Whole deal* (17 ms undoubled) on
-a desktop CPU -- well under a tenth of a second even on *Whole deal* with 1600
-worlds.
+(1.4 ms on undoubled deals) and 32 ms/move on *Whole deal* (16.6 ms undoubled)
+on a desktop CPU -- well under a tenth of a second even on *Whole deal*. Hints
+are cached per board position so toggling hints off and on at the same turn
+never re-rolls the percentages.
 
 The calls -- trump or mull, knock, knock back -- come from a separate
 **decision layer**. It plays for the *match*, not for the points of one deal:
@@ -150,12 +151,35 @@ trump deals and 1000 mull deals, duplicate, with real declarations and knocks;
 | 2 tricks (800 worlds) | +1.87 [+1.50, +2.24] | +1.31 [+1.01, +1.61] | **+1.76** [+1.28, +2.24] | **+1.89** [+1.34, +2.44] | 35.6 ms |
 | **Whole deal** (800 worlds) | **+2.13** [+1.76, +2.50] | **+1.60** [+1.30, +1.91] | **+1.75** [+1.27, +2.24] | **+1.88** [+1.37, +2.38] | 50.2 ms |
 
-On paired deals, the new *Whole deal* beats v1.1.2 *Whole deal* by **+0.59**
+On paired deals, the v1.1.3 *Whole deal* beat v1.1.2 *Whole deal* by **+0.59**
 [+0.19, +0.99] on trump deals (+0.34 [+0.01, +0.67] with knocks) and **+0.61**
 [+0.10, +1.12] on mull deals (+0.72 [+0.17, +1.27] with knocks) while running
-roughly 10× faster, and beats v1.1.2 *Standard* by **+0.68** [+0.24, +1.12] on
+roughly 10× faster, and beat v1.1.2 *Standard* by **+0.68** [+0.24, +1.12] on
 trump deals (+0.61 [+0.25, +0.96] with knocks). Defenders' trump leads from weak
 holdings stay low (~3.9 per 150 trump deals).
+
+**Follow-up releases (`v1.2.0` → `v1.2.3`, duplicate deals against the 36M Q-GRU network, paired vs previous release):**
+
+| Release | Key change | Trump vs prev | Mull vs prev | 4-core latency (undoubled) | Deals |
+|---|---|---|---|---|---|
+| **v1.2.0** (`models-v2`) | Dedicated `256×128` trump-deal `fast_policy` net (534 KB) | **+0.30** (+0.28 knocks) | — | unchanged | 1200 |
+| **v1.2.1 / v1.2.2** | 4-thread pool, candidate racing (`K0=192, z=2.5`), 1600w, trump Q-taper (`0.40→0.15`), 4-card mull AB; *Whole deal* default | **+0.33** | **+0.45** | 44.3 ms (17.3 ms) | 1400 |
+| **v1.2.3** | Exact belief-weighted DP world sampling (1000w) + position-key hint cache | −0.13 ± 0.29 (flat) | **+0.27** (+0.31 knocks) | **32.0 ms** (**16.6 ms**) | 1400 (incl. 800 OOS) |
+
+In `v1.2.3`, exact belief-weighted DP sampling cuts doubled-deal knock-weighting
+time by 43% (27.0 → 15.5 ms), cuts pick flips on tricks 1–5 by 2–6× by
+eliminating effective-sample-size collapse, and position-key caching makes
+toggling hints off/on at the same turn completely stable (0% jump).
+
+**Experiments tested and discarded** (did not beat `v1.2.x` out-of-sample or hit diminishing returns):
+
+| Experiment | Result (paired vs baseline) | Verdict |
+|---|---|---|
+| Wider `fast_policy` (`384×192`, `512×256`) | +0.27 trump (vs +0.34 for `256×128`), −0.50 mull | Saturated on trump, hurt mull |
+| Late-deal Q-GRU taper on mull (`0.40→0.15`) | −0.43 mull | Kept trump-only |
+| 5-card exact mull AB + 132 KB `FastDecl` | +0.40/+0.29 in-sample → +0.12 trump / +0.03 mull OOS (2200 deals) | Regressed out-of-sample |
+| Adaptive extra worlds (`1000w + 1600w` if top-2 < 0.65 pts) | +0.01 trump / −0.08 mull vs Belief-DP 1000w; fired on 46% of moves (2.35× slower) | Not worth latency cost |
+| Self-play policy iteration `v2` nets (61k trump + 37k mull `v1.2.3` deals: `FastPolicy` + `Belief` + `Q-GRU` PV+KL) | +0.06 ± 0.45 trump / +0.14 ± 0.50 mull vs `v1.2.3` (600 deals each) | Flat within noise; skipped 300 MB `models-v3` |
 
 How to rerun these matches: [research/README.md](research/README.md).
 
@@ -213,7 +237,7 @@ four repository secrets: `MANILLE_KEYSTORE_B64` (the keystore, base64),
 Android only installs an update signed with the same key as the installed
 app, so that key must never change.
 
-The networks are versioned separately as release `models-v1`
+The networks are versioned separately as release `models-v2`
 (`manille-app-models.zip`). A new set of networks goes into a new models
 release, and `MODELS_TAG` in the workflow and `scripts/fetch_models.sh` moves
 to it.
