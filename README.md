@@ -66,33 +66,39 @@ the dealer's team may **knock back** (*terugkloppen*, ×2). A deal scores
 Every move, for whichever bot is to play:
 
 1. **Track** what is public: the cards played, who showed out of which suit,
-   the calls.
-2. **Sample worlds**: 400 deals of the hidden cards consistent with everything
-   seen so far on *Standard* (1000 drawn directly from the **belief network**
-   via exact bottom-up weighted DP when the fast play-out net is enabled, or
-   exact enumeration late in the deal when all consistent worlds fit). Worlds
-   are weighted by play-history likelihood (the fast net's honest card
-   probabilities on trump deals, rule-policy mismatches otherwise) and, after a
-   knock, by how likely each hand was to make that call, then deduplicated and
+   the declaration and the knocks.
+2. **Sample worlds from the belief network**: a **belief network** (separate
+   models for trump and mull deals) predicts which hidden seat holds each unseen
+   card. An exact bottom-up weighted DP then draws **1,000 worlds** directly
+   from that belief distribution consistent with every public constraint (or
+   **400 worlds** on *Standard*, and **exact enumeration** late in the deal when
+   all consistent worlds fit). Worlds are weighted by play-history likelihood
+   (the fast net's honest card probabilities on trump deals, rule-policy
+   mismatches otherwise) and, after a knock, by how likely each dealt hand was
+   to make that call under the announce network, then deduplicated and
    stratified-resampled before play-out.
-3. **Rule tiers** propose a card: cash winners, keep the partner's trick, don't
-   feed the opponents' trick, lead the suit that develops tricks -- with a
-   separate rule set for no-trump play.
-4. **Play-out**: across up to 4 CPU cores in parallel, each world is played to
-   the end of the deal by a fast rule or learned policy (with two-stage
-   candidate racing pruning clearly dominated moves after 192 worlds, or solved
-   exactly by double-dummy alpha-beta in the last 4 tricks of a mull deal),
-   giving the expected final score of every card.
-5. **Blend** each card's play-out value with a learned **Q-network** (60/40,
-   tapering to 85/15 late in a trump deal and in the exact mull endgame), and
-   overrule the tiers' proposal only when the paired evidence across worlds
-   clears a z-test.
+3. **Rule tiers** propose a fallback card: cash winners, keep partner's trick,
+   don't feed opponents' trick, lead the suit that develops tricks -- with a
+   separate rule set for no-trump play and a margin guard against weak-trump
+   defender leads.
+4. **Play-out**: across up to 4 CPU cores in parallel, every legal card is
+   played out to the end of the deal across the sampled worlds using either the
+   rule policy (*Standard*) or a learned fast play-out network (*Whole deal*,
+   default -- with a dedicated trump-deal network and a mull network). Two-stage
+   candidate racing prunes clearly dominated cards after 192 worlds; in the last
+   4 tricks of a mull deal, an exact double-dummy alpha-beta solver replaces
+   rollouts.
+5. **Blend & decide**: each card's play-out value is blended with a learned
+   **Q-GRU network** (60/40 play-out/Q, tapering linearly to 85/15 late in a
+   trump deal and in the exact mull endgame), and the play-out overrules the
+   rule tiers' proposal only when the paired evidence across worlds clears a
+   z-test.
 
-Sampling, knock weighting and play-out take about 7 ms/move on *Standard*
-(1.4 ms on undoubled deals) and 32 ms/move on *Whole deal* (16.6 ms undoubled)
-on a desktop CPU -- well under a tenth of a second even on *Whole deal*. Hints
-are cached per board position so toggling hints off and on at the same turn
-never re-rolls the percentages.
+Sampling, knock weighting and play-out take about **32 ms/move** on *Whole deal*
+(**16.6 ms** undoubled) and **~7 ms/move** on *Standard* (**1.4 ms** undoubled)
+on a desktop CPU -- well under a tenth of a second. Hints run the exact same
+analysis and are cached per board position so toggling hints off and on at the
+same turn never re-rolls the percentages.
 
 The calls -- trump or mull, knock, knock back -- come from a separate
 **decision layer**. It plays for the *match*, not for the points of one deal:
