@@ -43,7 +43,9 @@ jobs:
           - os: macos-latest        # Apple Silicon; ONNX Runtime has no Intel macOS build
             format: dmg
             asset: Manille-macOS.dmg
-          - os: ubuntu-latest
+          # the oldest supported Ubuntu: the package needs that glibc or newer
+          # (built on ubuntu-latest, Belot's needed glibc 2.43 and did not start on 24.04)
+          - os: ubuntu-22.04
             format: deb
             asset: Manille-Linux.deb
     runs-on: ${{ matrix.os }}
