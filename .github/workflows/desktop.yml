@@ -16,7 +16,7 @@ on:
     paths:
       - 'cpp/**'
       - 'android/**'
-      - 'cardtable/**'
+      - 'cardbot-framework/**'
       - '.github/workflows/desktop.yml'
   workflow_call:
     inputs:

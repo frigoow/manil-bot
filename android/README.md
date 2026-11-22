@@ -1,7 +1,7 @@
 # Manille apps: Android and desktop
 
 The shared building blocks -- profiles, themes, cards, the table, the
-desktop's native build -- come from [cardtable](https://github.com/frigoow/cardtable),
+desktop's native build -- come from [cardbot-framework](https://github.com/frigoow/cardbot-framework),
 a git submodule at the repository root (`git submodule update --init`):
 its `platform` module is included as `:platform`, its `build-logic` is
 compiled into `buildSrc`. `manille/` is the game, `app/` and `desktop/` the
