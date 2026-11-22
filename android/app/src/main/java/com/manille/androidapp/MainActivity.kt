@@ -1,9 +1,10 @@
 package com.manille.androidapp
 
+import com.cardtable.platform.*
+
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.manille.shared.AppConfig
 import com.manille.shared.ManilleRoot
 
 /** The Android shell: per-build names, the platform, then the shared UI. */

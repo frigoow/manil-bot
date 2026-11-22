@@ -30,3 +30,8 @@ research/runs
 research/manille_ismcts*.so
 __pycache__/
 research/data/
+android/manille/build/
+android/platform/build/
+android/buildSrc/build/
+android/buildSrc/.gradle/
+cardtable/platform/build/

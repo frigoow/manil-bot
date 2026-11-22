@@ -1,5 +1,7 @@
 package com.manille.desktop
 
+import com.cardtable.platform.*
+
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.DpSize
@@ -10,7 +12,6 @@ import androidx.compose.ui.window.rememberWindowState
 import com.manille.jvm.JvmPlatform
 import com.manille.jvm.NativeLibrary
 import com.manille.jvm.OrtSessions
-import com.manille.shared.AppConfig
 import com.manille.shared.ManilleRoot
 import org.jetbrains.skia.Image
 import java.io.File

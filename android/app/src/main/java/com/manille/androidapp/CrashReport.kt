@@ -1,5 +1,7 @@
 package com.manille.androidapp
 
+import com.cardtable.platform.*
+
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog

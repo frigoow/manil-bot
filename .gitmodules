@@ -1,0 +1,3 @@
+[submodule "cardtable"]
+	path = cardtable
+	url = https://github.com/frigoow/cardtable.git
