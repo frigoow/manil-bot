@@ -1,5 +1,7 @@
 package com.manille.androidapp
 
+import com.cardtable.platform.*
+
 import com.manille.shared.*
 import android.content.Context
 import java.io.File

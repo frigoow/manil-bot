@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
       - name: Build
         run: |
           cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
@@ -27,12 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
       - name: Android SDK licences
-        # :shared's Android target needs the platform package even here;
+        # :manille's Android target needs the platform package even here;
         # Gradle installs it once the licences are accepted
         run: |
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -42,4 +46,4 @@ jobs:
         run: MODELS_TAG=models-v1 scripts/fetch_models.sh
       - name: Test
         working-directory: android
-        run: ./gradlew --no-daemon -Pmanille.skipAndroidApp=true :shared:desktopTest :desktop:compileKotlin
+        run: ./gradlew --no-daemon -Pmanille.skipAndroidApp=true :manille:desktopTest :desktop:compileKotlin

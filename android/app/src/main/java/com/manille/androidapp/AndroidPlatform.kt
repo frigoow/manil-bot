@@ -1,5 +1,7 @@
 package com.manille.androidapp
 
+import com.cardtable.platform.*
+
 import android.content.Context
 import android.util.Log
 import com.manille.jvm.JvmPlatform

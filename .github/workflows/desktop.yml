@@ -16,6 +16,7 @@ on:
     paths:
       - 'cpp/**'
       - 'android/**'
+      - 'cardtable/**'
       - '.github/workflows/desktop.yml'
   workflow_call:
     inputs:
@@ -52,6 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          submodules: true
           ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-java@v5
@@ -60,7 +62,7 @@ jobs:
           java-version: '21'
 
       - name: Android SDK licences
-        # :shared's Android target needs the platform package even here;
+        # :manille's Android target needs the platform package even here;
         # Gradle installs it once the licences are accepted
         run: |
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
