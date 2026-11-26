@@ -16,7 +16,8 @@ self-play stream; the blueprint does not need it to act.
 import torch
 import torch.nn as nn
 
-from .encoding import ACT_DIM, OBS_DIM
+from .encoding import (ACT_DIM, BELIEF_PRIOR_OFF, HISTORY_OFF, OBS_DIM,
+                       PLY_DIM, STATIC_DIM)
 from .dmc_tokens import (BELIEF_CTX_DIM, GLOBAL_DIM, MAX_HAND, MAX_PLAYS,
                          PAD_CARD, RAW_TOKEN_DIM)
 from .model import ResidualBlock, belief_probs, split_belief_inputs  # noqa: F401
@@ -141,6 +142,46 @@ class BeliefGRU(nn.Module):
         idx = (n_raw - 1).clamp_min(0)
         last = h[torch.arange(raw.shape[0], device=raw.device), idx]
         z = torch.relu(self.input(torch.cat([last, ctx], dim=-1)))
+        for block in self.blocks:
+            z = block(z)
+        return self.belief_head(z).view(-1, 3, 32)
+
+
+class BeliefGRUv2(nn.Module):
+    """Drop-in obs-only recurrent belief net (Bridge/Belote BeliefNet v2 arch):
+    slices the 31-ply public history + full static/belief/tactical tail out of
+    the canonical [B, OBS_DIM] observation, encodes history with a GRU, and
+    emits [B, 3, 32] prior-offset logits. Same input/output contract as
+    BeliefNet for both PyTorch and ONNX drop-in deployment."""
+
+    def __init__(self, obs_dim=OBS_DIM, d_tok=192, d_gru=256, hidden=384, blocks=2):
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.tail_dim = obs_dim - BELIEF_PRIOR_OFF
+        self.tok_proj = nn.Linear(PLY_DIM, d_tok)
+        self.gru = nn.GRU(d_tok, d_gru, num_layers=1, batch_first=True)
+        self.h0 = nn.Parameter(torch.zeros(1, 1, d_gru))
+        self.input = nn.Linear(d_gru + STATIC_DIM + self.tail_dim, hidden)
+        self.in_norm = nn.LayerNorm(hidden)
+        self.blocks = nn.ModuleList(ResidualBlock(hidden) for _ in range(blocks))
+        self.belief_head = nn.Linear(hidden, 3 * 32)
+        nn.init.zeros_(self.belief_head.weight)
+        nn.init.zeros_(self.belief_head.bias)
+
+    def forward(self, obs):
+        B = obs.shape[0]
+        static = obs[:, :STATIC_DIM]
+        hist = obs[:, HISTORY_OFF : HISTORY_OFF + MAX_PLAYS * PLY_DIM].reshape(
+            B, MAX_PLAYS, PLY_DIM)
+        tail = obs[:, BELIEF_PRIOR_OFF : self.obs_dim]
+        tok = torch.nn.functional.silu(self.tok_proj(hist))
+        h_seq, _ = self.gru(tok)
+        h_all = torch.cat([self.h0.expand(B, 1, -1), h_seq], dim=1)  # [B, 32, d_gru]
+        n_plays = (hist[:, :, :4].sum(dim=-1) > 0.5).to(torch.long).sum(dim=1)
+        idx = n_plays.view(B, 1, 1).expand(B, 1, h_all.shape[2])
+        last = h_all.gather(1, idx).squeeze(1)
+        z = torch.nn.functional.silu(self.in_norm(
+            self.input(torch.cat([last, static, tail], dim=-1))))
         for block in self.blocks:
             z = block(z)
         return self.belief_head(z).view(-1, 3, 32)
@@ -385,6 +426,20 @@ def load_oracle_model(path, device="cuda", hidden=1024, blocks=4):
 
 def load_belief_model(path, device="cuda", hidden=512, blocks=2):
     state = torch.load(path, map_location="cpu", weights_only=True)
+    cfg = state.get("config", {})
+    if cfg.get("arch") == "gru_v2":
+        model = BeliefGRUv2(
+            obs_dim=cfg.get("obs_dim", OBS_DIM),
+            d_tok=cfg.get("d_tok", 192),
+            d_gru=cfg.get("d_gru", 256),
+            hidden=cfg.get("hidden", 384),
+            blocks=cfg.get("blocks", 2),
+        )
+        if "model" in state:
+            state = state["model"]
+        model.load_state_dict(state)
+        model.to(device).eval()
+        return model
     if "config" in state:
         hidden = state["config"].get("hidden", hidden)
         blocks = state["config"].get("blocks", blocks)

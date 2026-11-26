@@ -339,6 +339,46 @@ int choose(const Net& net, const ManilleGame& game, int seat) {
     return best;
 }
 
+void legal_probs(const Net& net, const ManilleGame& game, int seat,
+                 const std::vector<int>& legal, std::vector<double>& probs_out) {
+    probs_out.assign(legal.size(), 0.0);
+    if (legal.empty()) return;
+    if (legal.size() == 1 || net.empty()) {
+        probs_out[0] = 1.0;
+        return;
+    }
+    std::vector<int> active;
+    float dense[F_DENSE];
+    features(game, seat, active, dense);
+    const int h1 = net.h1, h2 = net.h2;
+    thread_local std::vector<float> a1, a2;
+    a1.resize(static_cast<size_t>(h1));
+    a2.resize(static_cast<size_t>(h2));
+    std::memcpy(a1.data(), net.b1.data(), static_cast<size_t>(h1) * sizeof(float));
+    const float* w1t = net.w1t.data();
+    for (int idx : active) {
+        const float* col = w1t + static_cast<size_t>(idx) * h1;
+        for (int o = 0; o < h1; ++o) a1[o] += col[o];
+    }
+    const float* cd0 = w1t + static_cast<size_t>(F_BINARY) * h1;
+    const float* cd1 = w1t + static_cast<size_t>(F_BINARY + 1) * h1;
+    for (int o = 0; o < h1; ++o) a1[o] += dense[0] * cd0[o] + dense[1] * cd1[o];
+    alignas(32) float logits[32];
+    forwardLayers23(net, a1.data(), a2.data(), logits);
+    double mx = -1e30;
+    for (size_t i = 0; i < legal.size(); ++i) {
+        probs_out[i] = double(logits[legal[i]]);
+        if (probs_out[i] > mx) mx = probs_out[i];
+    }
+    double sum_e = 0.0;
+    for (double& p : probs_out) {
+        p = std::exp(std::max(-40.0, p - mx));
+        sum_e += p;
+    }
+    const double inv = 1.0 / std::max(sum_e, 1e-12);
+    for (double& p : probs_out) p *= inv;
+}
+
 std::vector<double> history_log_likelihood(
     const Net& net, int trump, int declarer, int me,
     const std::vector<rollout::World>& worlds,
@@ -553,9 +593,11 @@ std::vector<std::vector<double>> evaluate_candidates(
     const Net& net, int trump, int declarer, int me,
     const std::vector<int>& candidates,
     const std::vector<rollout::World>& worlds,
-    const rollout::History& history) {
+    const rollout::History& history,
+    int endgame_ab_cards) {
     std::vector<std::vector<double>> out(candidates.size(),
                                          std::vector<double>(worlds.size(), 0.0));
+    const int ab_played_thresh = endgame_ab_cards > 0 ? (32 - 4 * endgame_ab_cards) : 99;
     manille_parallel::parallel_for(worlds.size(), 16, [&](size_t b, size_t e) {
         for (size_t wi = b; wi < e; ++wi) {
             rollout::World start = worlds[wi];
@@ -571,7 +613,14 @@ std::vector<std::vector<double>> evaluate_candidates(
             for (size_t ci = 0; ci < candidates.size(); ++ci) {
                 ManilleGame g = base;
                 g.doMove(Card::from_index(candidates[ci]));
+                bool solved = false;
                 while (!g.finished()) {
+                    if (endgame_ab_cards > 0 && g.trickSize() == 0
+                            && g.playedCardCount() >= ab_played_thresh) {
+                        out[ci][wi] = rollout::solve_endgame_value(g, me);
+                        solved = true;
+                        break;
+                    }
                     const int seat = static_cast<int>(g.currentPlayer());
                     const int64_t hand = g.handMask(seat);
                     int c;
@@ -582,7 +631,8 @@ std::vector<std::vector<double>> evaluate_candidates(
                     }
                     g.doMove(Card::from_index(c));
                 }
-                out[ci][wi] = g.teamPoints(me % 2);
+                if (!solved)
+                    out[ci][wi] = g.teamPoints(me % 2);
             }
         }
     });

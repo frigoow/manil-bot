@@ -101,6 +101,10 @@ std::vector<std::vector<double>> evaluate_endgame(
     const std::vector<int>& candidates,
     const std::vector<World>& worlds);
 
+// Exact double-dummy final team points for `me`'s team from an open-hands position
+// (for handing off the last 2-3 tricks of fast-policy play-outs to exact alpha-beta).
+double solve_endgame_value(const ManilleGame& game, int me);
+
 // Likelihood weight per world: each play by another seat that the policy
 // would not have made in that world multiplies the weight by eps.
 std::vector<double> world_weights(

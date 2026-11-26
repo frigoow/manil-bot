@@ -514,6 +514,54 @@ PYBIND11_MODULE(manille_ismcts, m) {
           // that size arrays off n instead of len(result) must leave it off.
           py::arg("allow_short") = false);
 
+    m.def("sample_determinizations_belief",
+          [](py::array_t<int64_t> hands,
+             py::array_t<int32_t> trick_cards,
+             py::array_t<int32_t> trick_players,
+             py::array_t<int32_t> played_cards,
+             py::array_t<int32_t> played_players,
+             int n_played_cards,
+             int n_trick,
+             int current_player,
+             int trump_suit,
+             int pts0, int pts1,
+             int tricks_won0, int tricks_won1,
+             int observer,
+             int n,
+             py::array_t<float, py::array::c_style | py::array::forcecast> belief,
+             double belief_w,
+             bool allow_short) {
+              if (belief.size() != 96)
+                  throw std::invalid_argument("belief must hold 3x32 floats");
+              auto game = game_from_args(
+                  hands, trick_cards, trick_players,
+                  played_cards, played_players, n_played_cards,
+                  n_trick, current_player, trump_suit,
+                  pts0, pts1, tricks_won0, tricks_won1, false, -1);
+              static const sampler::UniformDealSampler u_sampler;
+              const auto public_state = sampler::PublicState::fromGame(game, observer);
+              bool enumerated = false;
+              std::vector<sampler::Deal> deals;
+              {
+                  py::gil_scoped_release release;
+                  deals = u_sampler.sampleDealsBelief(public_state, n, belief.data(),
+                                                      belief_w, allow_short, &enumerated);
+              }
+              py::array_t<int64_t> out(
+                  std::vector<ssize_t>{static_cast<ssize_t>(deals.size()), 4});
+              auto out_mut = out.mutable_unchecked<2>();
+              for (ssize_t k = 0; k < static_cast<ssize_t>(deals.size()); ++k)
+                  for (int p = 0; p < 4; ++p)
+                      out_mut(k, p) = deals[static_cast<size_t>(k)].hands[p];
+              return py::make_tuple(out, !enumerated);
+          },
+          py::arg("hands"), py::arg("trick_cards"), py::arg("trick_players"),
+          py::arg("played_cards"), py::arg("played_players"), py::arg("n_played_cards"),
+          py::arg("n_trick"), py::arg("current_player"), py::arg("trump_suit"),
+          py::arg("pts0"), py::arg("pts1"), py::arg("tricks_won0"), py::arg("tricks_won1"),
+          py::arg("observer"), py::arg("n"), py::arg("belief"),
+          py::arg("belief_w") = 0.75, py::arg("allow_short") = true);
+
     // --- Learning-stack bindings ---
 
     m.attr("OBS_DIM") = encoding::OBS_DIM;
@@ -1371,6 +1419,12 @@ PYBIND11_MODULE(manille_ismcts, m) {
         .def_readwrite("mull_endgame_ab_cards", &rule::Params::mull_endgame_ab_cards)
         .def_readwrite("mull_endgame_q_w", &rule::Params::mull_endgame_q_w)
         .def_readwrite("mull_endgame_z", &rule::Params::mull_endgame_z)
+        .def_readwrite("suit_endgame_ab_cards", &rule::Params::suit_endgame_ab_cards)
+        .def_readwrite("suit_endgame_q_w", &rule::Params::suit_endgame_q_w)
+        .def_readwrite("suit_endgame_z", &rule::Params::suit_endgame_z)
+        .def_readwrite("playout_ab_cards", &rule::Params::playout_ab_cards)
+        .def_readwrite("mull_playout_ab_cards", &rule::Params::mull_playout_ab_cards)
+        .def_readwrite("policy_blend", &rule::Params::policy_blend)
         .def_readwrite("suit_net_z", &rule::Params::suit_net_z)
         .def_readwrite("playout_race_k", &rule::Params::playout_race_k)
         .def_readwrite("playout_race_z", &rule::Params::playout_race_z)

@@ -564,8 +564,11 @@ static rule::Params deployed_params() {
     //    resampling (playout_sir) cuts low-weight world waste;
     //  - suit deals with fast-policy net: honest soft action log-likelihood
     //    replaces clairvoyant rule mismatches, and z = 0.5;
-    //  - mull deals at <= 3 cards/hand: exact double-dummy alpha-beta solver
-    //    with ab_qw = 0.15 and ab_z = 0.0.
+    //  - mull deals at <= 4 cards/hand: exact double-dummy alpha-beta solver
+    //    with ab_qw = 0.15 and ab_z = 0.0, plus 3-trick AB handoff inside
+    //    early mull fast-policy play-outs (23% faster, +0.10/+0.13 over 2000d);
+    //  - trump deals at <= 4 cards/hand: exact double-dummy alpha-beta solver
+    //    with ab_qw = 0.15 and ab_z = 0.0 (+0.19/+0.21 over 2000d, 4% faster).
     params.playout_nt_rules = 31 | 128 | 256;
     params.def_trump_margin = 1.0;
     params.def_trump_lock_weak = true;
@@ -576,6 +579,10 @@ static rule::Params deployed_params() {
     params.mull_endgame_ab_cards = 4;
     params.mull_endgame_q_w = 0.15;
     params.mull_endgame_z = 0.0;
+    params.suit_endgame_ab_cards = 4;
+    params.suit_endgame_q_w = 0.15;
+    params.suit_endgame_z = 0.0;
+    params.mull_playout_ab_cards = 3;
     params.suit_net_z = 0.5;
     return params;
 }

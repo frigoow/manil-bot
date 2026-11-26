@@ -67,6 +67,10 @@ Net load_binary(const std::string& path);
 // The net's card for `seat` to move: argmax logit over the legal cards.
 int choose(const Net& net, const ManilleGame& game, int seat);
 
+// Softmax probabilities over `legal` cards for `seat` to move.
+void legal_probs(const Net& net, const ManilleGame& game, int seat,
+                 const std::vector<int>& legal, std::vector<double>& probs_out);
+
 // Honest soft action log-likelihood over `history` for each sampled world:
 // replays the public history once, precomputes public layer-1 activations per
 // ply, and sums weight * log_softmax(logits / tau)[actual_card] over non-forced
@@ -78,12 +82,15 @@ std::vector<double> history_log_likelihood(
     double tau, double partner_w, double opp_w);
 
 // rollout::evaluate_candidates with every seat following the net: my team's
-// final points, [candidate][world].
+// final points, [candidate][world]. When endgame_ab_cards > 0, hands off to
+// exact double-dummy alpha-beta at trick boundaries once <= endgame_ab_cards
+// tricks remain.
 std::vector<std::vector<double>> evaluate_candidates(
     const Net& net, int trump, int declarer, int me,
     const std::vector<int>& candidates,
     const std::vector<rollout::World>& worlds,
-    const rollout::History& history);
+    const rollout::History& history,
+    int endgame_ab_cards = 0);
 
 } // namespace fastpolicy
 

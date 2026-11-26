@@ -145,6 +145,19 @@ struct Params {
     int mull_endgame_ab_cards = 0;
     double mull_endgame_q_w = -1.0;
     double mull_endgame_z = -1.0;
+    // exact double-dummy alpha-beta solver on suit (trump) deals when hand
+    // size <= suit_endgame_ab_cards (0 = off); < 0 falls back to normal qw/z
+    int suit_endgame_ab_cards = 0;
+    double suit_endgame_q_w = -1.0;
+    double suit_endgame_z = -1.0;
+    // exact alpha-beta handoff inside fast-policy play-outs when <= this many
+    // tricks remain (0 = off, e.g. 2 or 3). mull_playout_ab_cards applies on
+    // mull deals only (overrides playout_ab_cards when > 0).
+    int playout_ab_cards = 0;
+    int mull_playout_ab_cards = 0;
+    // calibrated FastPolicy softmax tiebreak (in team points) added on all tricks
+    // including exact AB endgames (0 = off, e.g. 0.25..0.50)
+    double policy_blend = 0.0;
     // paired-test z on suit deals when the fast policy net plays the
     // continuation (< 0 = use playout_z)
     double suit_net_z = -1.0;

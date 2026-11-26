@@ -1216,8 +1216,10 @@ Decision choose(const ManilleGame& game, int me, int dealer,
     if (P.playout && k.haveW && k.legal.size() > 1
             && static_cast<int>(k.hand.size()) <= P.playout_max_cards) {
         const bool mull = k.trump < 0;
-        const bool use_ab = mull && P.mull_endgame_ab_cards > 0
-            && static_cast<int>(k.hand.size()) <= P.mull_endgame_ab_cards;
+        const bool use_ab = (mull && P.mull_endgame_ab_cards > 0
+                             && static_cast<int>(k.hand.size()) <= P.mull_endgame_ab_cards)
+                         || (!mull && P.suit_endgame_ab_cards > 0
+                             && static_cast<int>(k.hand.size()) <= P.suit_endgame_ab_cards);
         const bool use_sir = P.playout_sir;
         const size_t raw_n = use_sir
             ? k.W.size()
@@ -1311,12 +1313,16 @@ Decision choose(const ManilleGame& game, int me, int dealer,
                                            || (P.playout_net_plies == 0 && P.playout_net_mix >= 1.0));
         const bool hybrid = has_net && P.playout_net_plies > 0 && !net_whole;
 
+        const int pab_cards = (mull && P.mull_playout_ab_cards > 0)
+            ? P.mull_playout_ab_cards : P.playout_ab_cards;
+
         auto run_playout = [&](const std::vector<int>& cands,
                                const std::vector<rollout::World>& ws_sub) {
             if (use_ab)
                 return rollout::evaluate_endgame(game, me, cands, ws_sub);
             if (net_whole)
-                return fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, cands, ws_sub, history);
+                return fastpolicy::evaluate_candidates(*net, k.trump, dealer, me, cands, ws_sub, history,
+                                                       pab_cards);
             rollout::Options opt;
             opt.honest = 0;
             opt.agent_like = true;
@@ -1345,7 +1351,10 @@ Decision choose(const ManilleGame& game, int me, int dealer,
             const double t = std::clamp((8.0 - double(k.hand.size())) / 6.0, 0.0, 1.0);
             base_qw = base_qw + t * (P.suit_root_q_w_late - base_qw);
         }
-        const double qw = (use_ab && P.mull_endgame_q_w >= 0) ? P.mull_endgame_q_w : base_qw;
+        const double qw = use_ab
+            ? (mull ? (P.mull_endgame_q_w >= 0 ? P.mull_endgame_q_w : base_qw)
+                    : (P.suit_endgame_q_w >= 0 ? P.suit_endgame_q_w : base_qw))
+            : base_qw;
 
         // Precompute lock / def_trump penalties so racing uses the exact same objective.
         const bool lock = P.nt_lock_cash_from_trick > 0 && k.trump < 0 && k.trick.empty()
@@ -1500,6 +1509,18 @@ Decision choose(const ManilleGame& game, int me, int dealer,
                 vals[ci] = s;
             }
         }
+        // Optional calibrated FastPolicy softmax tiebreak (team points) active on ALL tricks
+        // including exact double-dummy alpha-beta endgames!
+        if (has_net && P.policy_blend > 0.0 && k.legal.size() > 1) {
+            std::vector<double> fprobs;
+            fastpolicy::legal_probs(*net, game, me, k.legal, fprobs);
+            for (size_t ci = 0; ci < k.legal.size(); ++ci) {
+                if (!active_cand[ci]) continue;
+                const double pb = P.policy_blend * fprobs[ci];
+                vals[ci] += pb;
+                for (double& v : per[ci]) v += pb;
+            }
+        }
         d.value_cards = k.legal;
         d.values = vals;
         auto adj = [&](size_t ci) {
@@ -1521,8 +1542,10 @@ Decision choose(const ManilleGame& game, int me, int dealer,
         }
         const bool used_net_playout = has_net && (P.playout_net_plies > 0 || P.playout_net_mix > 0);
         double z_eff = P.playout_z;
-        if (use_ab && P.mull_endgame_z >= 0)
+        if (use_ab && mull && P.mull_endgame_z >= 0)
             z_eff = P.mull_endgame_z;
+        else if (use_ab && !mull && P.suit_endgame_z >= 0)
+            z_eff = P.suit_endgame_z;
         else if (!mull && used_net_playout && P.suit_net_z >= 0)
             z_eff = P.suit_net_z;
         if (k.legal[bi] != choice) {

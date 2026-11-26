@@ -214,11 +214,18 @@ DEFAULTS = dict(
     mull_endgame_ab_cards=0,  # exact double-dummy alpha-beta on mull at <= this hand size
     mull_endgame_q_w=-1.0, # root Q weight when mull AB runs (< 0 = normal qw)
     mull_endgame_z=-1.0,   # z threshold when mull AB runs (< 0 = playout_z)
+    suit_endgame_ab_cards=0,  # exact double-dummy alpha-beta on trump at <= this hand size
+    suit_endgame_q_w=-1.0, # root Q weight when trump AB runs (< 0 = normal qw)
+    suit_endgame_z=-1.0,   # z threshold when trump AB runs (< 0 = playout_z)
+    playout_ab_cards=0,    # exact AB handoff inside fast-policy play-outs (<= K tricks left)
+    mull_playout_ab_cards=0,  # mull-only exact AB handoff inside fast-policy play-outs
+    policy_blend=0.0,      # calibrated FastPolicy softmax tiebreak (team pts) on all tricks
     suit_net_z=-1.0,       # z threshold on suit deals with fast_policy (< 0 = playout_z)
     playout_race_k=0,      # two-stage candidate racing Stage-1 world count (0 = off)
     playout_race_z=2.5,    # Stage-1 pruning z-bound in paired SEs
     suit_root_q_w_late=-1.0,  # late-deal Q blend weight on suit deals (< 0 = off)
     worlds_belief_sampled=False,  # True when worlds were drawn from belief-weighted DP
+    belief_sample=False,   # use Belief-DP sampler (v1.2.3 deploy path) when native=True
     native=False,          # run the deploy path in C++ (cpp/rule_agent.cpp) when the
                            # params allow it (native_supported); nets stay in Python
 )
@@ -248,7 +255,9 @@ NATIVE_FIELDS = (
     'ruff_convention through_fix last_ruff_low playout_z playout_nt_rules playout_tr_rules '
     'lik_belief_w lik_partner_eps lik_opp_eps root_q_w '
     'playout_sir lik_net_partner_w lik_net_opp_w lik_net_tau '
-    'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z suit_net_z '
+    'mull_endgame_ab_cards mull_endgame_q_w mull_endgame_z '
+    'suit_endgame_ab_cards suit_endgame_q_w suit_endgame_z '
+    'playout_ab_cards mull_playout_ab_cards policy_blend suit_net_z '
     'playout_race_k playout_race_z suit_root_q_w_late worlds_belief_sampled').split()
 
 
@@ -600,14 +609,16 @@ class RuleAgent(Agent):
             probs = belief_probs(cache[path](obs_t), *split_belief_inputs(obs_t))
         return probs.squeeze(0).cpu().numpy().astype(np.float32)
 
-    def native_choose(self, game, player_id, played_cards, played_players, arrays, worlds):
+    def native_choose(self, game, player_id, played_cards, played_players, arrays, worlds,
+                      probs=None, belief_sampled=None):
         """cpp/rule_agent.cpp on the given n_worlds sample (absolute seats)."""
         t = -1 if game.trump_suit is None else int(game.trump_suit)
         history = list(zip(played_players, played_cards)) + \
             [(p, c.to_index()) for p, c in game.current_trick]
         hs = np.array([s for s, _ in history], dtype=np.int32)
         hc = np.array([c for _, c in history], dtype=np.int32)
-        probs = self.belief_probs(t, arrays, player_id)
+        if probs is None:
+            probs = self.belief_probs(t, arrays, player_id)
         q = None
         if self._q_weight(t < 0) > 0:
             self._blend_root_q({}, game, player_id, played_cards, played_players)
@@ -627,8 +638,11 @@ class RuleAgent(Agent):
                 from .fast_policy import load_native
                 _FAST_NETS[self.p['playout_net']] = load_native(self.p['playout_net'])
             net = _FAST_NETS[self.p['playout_net']]
+        nparams = self._native_params()
+        if belief_sampled is not None:
+            nparams.worlds_belief_sampled = bool(belief_sampled)
         card, why, vals = mi.rule_agent_choose(*arrays, self.dealer, player_id, W, hs, hc,
-                                               probs, q, self._native_params(), extra, net)
+                                               probs, q, nparams, extra, net)
         self.last_values = dict(vals) if vals else None
         return card, why
 
@@ -639,13 +653,22 @@ class RuleAgent(Agent):
             return legal[0]
         arrays = game_to_cpp_arrays(game, played_cards, played_players)
         if self.p['native'] and self.native_supported():
-            try:
-                worlds = mi.sample_determinizations(
-                    *arrays, player_id, self.p['n_worlds'], self._sampler_declarer(), True)
-            except RuntimeError:
-                worlds = None
+            probs, belief_sampled = None, None
+            if self.p['belief_sample'] and not self.p['trump_rule_known']:
+                t = -1 if game.trump_suit is None else int(game.trump_suit)
+                probs = self.belief_probs(t, arrays, player_id)
+                worlds, belief_sampled = mi.sample_determinizations_belief(
+                    *arrays, player_id, self.p['n_worlds'], probs,
+                    self.p['lik_belief_w'], True)
+            else:
+                try:
+                    worlds = mi.sample_determinizations(
+                        *arrays, player_id, self.p['n_worlds'], self._sampler_declarer(), True)
+                except RuntimeError:
+                    worlds = None
             card, why = self.native_choose(game, player_id, played_cards, played_players,
-                                           arrays, worlds)
+                                           arrays, worlds, probs=probs,
+                                           belief_sampled=belief_sampled)
             if self.verbose:
                 self.log.append(f"P{player_id} -> {cstr(card)}  ({why}) [native]")
             return Card.from_index(card)

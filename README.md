@@ -171,6 +171,7 @@ holdings stay low (~3.9 per 150 trump deals).
 | **v1.2.0** (`models-v2`) | Dedicated `256×128` trump-deal `fast_policy` net (534 KB) | **+0.30** (+0.28 knocks) | — | unchanged | 1200 |
 | **v1.2.1 / v1.2.2** | 4-thread pool, candidate racing (`K0=192, z=2.5`), 1600w, trump Q-taper (`0.40→0.15`), 4-card mull AB; *Whole deal* default | **+0.33** | **+0.45** | 44.3 ms (17.3 ms) | 1400 |
 | **v1.2.3** | Exact belief-weighted DP world sampling (1000w) + position-key hint cache | −0.13 ± 0.29 (flat) | **+0.27** (+0.31 knocks) | **32.0 ms** (**16.6 ms**) | 1400 (incl. 800 OOS) |
+| **v1.2.4** (`bridge-levers`) | 4-card exact root AB on trump (`suit_endgame_ab_cards=4`, `q_w=0.15`, `z=0.0`) + 3-trick exact AB handoff inside mull fast-policy play-outs (`mull_playout_ab_cards=3`); zero model changes | **+0.19** (**+0.21** knocks, `p < 0.02`) | **+0.10** (+0.13 knocks) | **−4% trump / −23% mull** | 2000 trump + 2000 mull (incl. 2000 OOS) |
 
 In `v1.2.3`, exact belief-weighted DP sampling cuts doubled-deal knock-weighting
 time by 43% (27.0 → 15.5 ms), cuts pick flips on tricks 1–5 by 2–6× by
@@ -186,6 +187,9 @@ toggling hints off/on at the same turn completely stable (0% jump).
 | 5-card exact mull AB + 132 KB `FastDecl` | +0.40/+0.29 in-sample → +0.12 trump / +0.03 mull OOS (2200 deals) | Regressed out-of-sample |
 | Adaptive extra worlds (`1000w + 1600w` if top-2 < 0.65 pts) | +0.01 trump / −0.08 mull vs Belief-DP 1000w; fired on 46% of moves (2.35× slower) | Not worth latency cost |
 | Self-play policy iteration `v2` nets (61k trump + 37k mull `v1.2.3` deals: `FastPolicy` + `Belief` + `Q-GRU` PV+KL) | +0.06 ± 0.45 trump / +0.14 ± 0.50 mull vs `v1.2.3` (600 deals each) | Flat within noise; skipped 300 MB `models-v3` |
+| Mid-playout exact AB handoff on trump (`playout_ab_cards=2/3`) | −0.15 to −0.23 trump vs `suit_ab4` (1000 deals) | Double-dummy peeking hurts trump play-outs; kept mull-only |
+| `FastPolicy` softmax tiebreak (`policy_blend=0.35`) | +0.16 in-sample → +0.10 OOS trump (−0.13 vs `suit_ab4`) | Dilutes Manille's 36M `Q-GRU` tiebreak |
+| Drop-in 5.1 MB `BeliefGRUv2` (`256`-GRU over 31-ply history, 24× suit symmetry) | Strong CE win (Suit `0.9195 → 0.9075`, T7 `−0.039`; Mull `0.9010 → 0.8962`), but −0.03 trump / +0.04 mull in play (2000d) | Over-sharpens world weights at `lik_belief_w=0.75` alongside `FastPolicy` likelihood; kept shipped ONNX |
 
 How to rerun these matches: [research/README.md](research/README.md).
 

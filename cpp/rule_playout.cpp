@@ -1126,4 +1126,47 @@ std::vector<std::vector<double>> evaluate_endgame(
     return out;
 }
 
+double solve_endgame_value(const ManilleGame& game, int me) {
+    if (game.finished())
+        return double(game.teamPoints(me % 2));
+    const int trump = game.trumpSuit();
+    const int base_pts0 = game.teamPoints(0);
+    const int n_trick = game.trickSize();
+    int led = 0, w_card = -1, w_player = -1, base_tpts = 0;
+    if (n_trick > 0) {
+        led = suitOf(game.trickCard(0));
+        w_card = game.trickCard(0);
+        w_player = game.trickPlayer(0);
+        base_tpts = PTS[rankOf(w_card)];
+        for (int i = 1; i < n_trick; ++i) {
+            const int tc = game.trickCard(i);
+            const int tp = game.trickPlayer(i);
+            base_tpts += PTS[rankOf(tc)];
+            if (beatsCard(tc, w_card, trump)) {
+                w_card = tc;
+                w_player = tp;
+            }
+        }
+    }
+    uint32_t h[4] = {
+        static_cast<uint32_t>(game.handMask(0)),
+        static_cast<uint32_t>(game.handMask(1)),
+        static_cast<uint32_t>(game.handMask(2)),
+        static_cast<uint32_t>(game.handMask(3))
+    };
+    int rem_pts = base_tpts;
+    uint32_t all_cards = h[0] | h[1] | h[2] | h[3];
+    while (all_cards) {
+        const int c = manille::ctz64(all_cards);
+        all_cards &= all_cards - 1u;
+        rem_pts += PTS[c & 7];
+    }
+    thread_local EndgameSolver solver;
+    solver.newWorld(trump);
+    const int pts0_rem = solver.ab(h, static_cast<int>(game.currentPlayer()), n_trick, led,
+                                   w_card, w_player, base_tpts, rem_pts, -1, rem_pts + 1);
+    const int final_pts0 = base_pts0 + pts0_rem;
+    return (me % 2 == 0) ? double(final_pts0) : double(60 - final_pts0);
+}
+
 } // namespace rollout

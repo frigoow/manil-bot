@@ -48,7 +48,33 @@ def load_model(path):
     return model.eval()
 
 
+def load_native_binary(path):
+    """Load an exported MFPN binary file directly into mi.FastPolicyNet."""
+    import struct
+    with open(path, "rb") as f:
+        hdr = f.read(20)
+        if len(hdr) < 20 or hdr[:4] != b"MFPN":
+            raise ValueError(f"Not an MFPN fast policy file: {path}")
+        ver, f_dim, h1, h2 = struct.unpack("<4i", hdr[4:20])
+        if ver != 1 or f_dim != F_DIM:
+            raise ValueError(f"Unsupported MFPN header ({ver}, {f_dim}) in {path}")
+        raw = np.frombuffer(f.read(), dtype="<f4")
+    off = 0
+    def take(*shape):
+        nonlocal off
+        n = int(np.prod(shape))
+        arr = np.ascontiguousarray(raw[off:off + n].reshape(shape), dtype=np.float32)
+        off += n
+        return arr
+    w1, b1 = take(h1, f_dim), take(h1)
+    w2, b2 = take(h2, h1), take(h2)
+    w3, b3 = take(32, h2), take(32)
+    return mi.FastPolicyNet(w1, b1, w2, b2, w3, b3)
+
+
 def load_native(path):
+    if str(path).endswith(".bin"):
+        return load_native_binary(path)
     return to_native(load_model(path))
 
 
